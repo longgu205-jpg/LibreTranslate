@@ -43,7 +43,7 @@ curl -X POST http://127.0.0.1:8000/translate \
 {
   "translated_text": "更新設定檔後請重新啟動伺服器。",
   "source": "cloud",
-  "model": "llama-3.3-70b-versatile",
+  "model": "openai/gpt-oss-120b",
   "source_lang": "en",
   "target_lang": "zh-TW",
   "elapsed_ms": 1234

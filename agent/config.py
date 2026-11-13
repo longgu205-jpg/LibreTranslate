@@ -7,7 +7,7 @@ load_dotenv()
 PROVIDER_DEFAULTS = {
     "groq": {
         "base_url": "https://api.groq.com/openai/v1",
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-120b",
     },
     "mistral": {
         "base_url": "https://api.mistral.ai/v1",

@@ -17,7 +17,7 @@ def fake_api_key(monkeypatch):
 
 
 class FakeClient:
-    model = "llama-3.3-70b-versatile"
+    model = "openai/gpt-oss-120b"
 
     def chat(self, prompt, timeout, temperature=0.2):
         return "這是 __PROTECTED_BLOCK_0__ 與 __PROTECTED_BLOCK_1__ 的譯文。"
@@ -27,7 +27,7 @@ class FakeClient:
 
 
 class FailingClient:
-    model = "llama-3.3-70b-versatile"
+    model = "openai/gpt-oss-120b"
 
     def chat(self, prompt, timeout, temperature=0.2):
         raise LLMError("LLM API failed after retries: HTTP 500")
