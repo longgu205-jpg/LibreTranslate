@@ -3,21 +3,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from agent.main import app
-from agent.mistral_client import MistralError
-
-import pytest
+from agent.llm_client import LLMError
 
 
 @pytest.fixture(autouse=True)
 def fake_api_key(monkeypatch):
-    monkeypatch.setattr("agent.main.settings.mistral_api_key", "test-key")
+    monkeypatch.setattr("agent.main.settings.llm_api_key", "test-key")
 
 
 class FakeClient:
-    model = "mistral-large-latest"
+    model = "llama-3.3-70b-versatile"
 
     def chat(self, prompt, timeout, temperature=0.2):
         return "這是 __PROTECTED_BLOCK_0__ 與 __PROTECTED_BLOCK_1__ 的譯文。"
@@ -27,10 +27,10 @@ class FakeClient:
 
 
 class FailingClient:
-    model = "mistral-large-latest"
+    model = "llama-3.3-70b-versatile"
 
     def chat(self, prompt, timeout, temperature=0.2):
-        raise MistralError("Mistral API failed after retries: HTTP 500")
+        raise LLMError("LLM API failed after retries: HTTP 500")
 
     def close(self):
         pass
@@ -60,9 +60,9 @@ def test_translate_passthrough_same_lang():
     assert body["translated_text"] == "Hello"
 
 
-def test_translate_calls_mistral_and_restores_code():
+def test_translate_calls_llm_and_restores_code():
     client = make_client()
-    app.state.mistral_client = FakeClient()
+    app.state.llm_client = FakeClient()
     response = client.post(
         "/translate",
         json={"text": "This is `code`:\n```python\nprint(1)\n```", "target_lang": "zh-TW"},
@@ -74,9 +74,9 @@ def test_translate_calls_mistral_and_restores_code():
     assert "```python\nprint(1)\n```" in body["translated_text"]
 
 
-def test_translate_returns_502_on_mistral_error():
+def test_translate_returns_502_on_llm_error():
     client = make_client()
-    app.state.mistral_client = FailingClient()
+    app.state.llm_client = FailingClient()
     response = client.post("/translate", json={"text": "Hello", "target_lang": "zh-TW"})
     assert response.status_code == 502
 

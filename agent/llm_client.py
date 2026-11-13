@@ -4,27 +4,27 @@ import httpx
 
 from agent.config import settings
 
-logger = logging.getLogger("agent.mistral")
+logger = logging.getLogger("agent.llm")
 
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
-class MistralError(Exception):
+class LLMError(Exception):
     pass
 
 
-class MistralClient:
-    CHAT_URL = "https://api.mistral.ai/v1/chat/completions"
-
+class LLMClient:
     def __init__(
         self,
         api_key: str | None = None,
         model: str | None = None,
+        base_url: str | None = None,
         connect_timeout: float | None = None,
         max_retries: int | None = None,
     ):
-        self.api_key = api_key or settings.mistral_api_key
-        self.model = model or settings.mistral_model
+        self.api_key = api_key or settings.llm_api_key
+        self.model = model or settings.llm_model
+        self.base_url = (base_url or settings.llm_base_url).rstrip("/")
         self.connect_timeout = connect_timeout or settings.connect_timeout
         self.max_retries = settings.max_retries if max_retries is None else max_retries
         self._client = httpx.Client(
@@ -45,22 +45,24 @@ class MistralClient:
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = self._client.post(self.CHAT_URL, json=payload, timeout=timeout_config)
+                response = self._client.post(
+                    f"{self.base_url}/chat/completions", json=payload, timeout=timeout_config
+                )
             except httpx.HTTPError as exc:
                 last_error = f"network error: {exc}"
-                logger.warning("Mistral attempt %d failed: %s", attempt, last_error)
+                logger.warning("LLM attempt %d failed: %s", attempt, last_error)
                 continue
 
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
 
             last_error = f"HTTP {response.status_code}: {response.text[:300]}"
-            logger.warning("Mistral attempt %d failed: %s", attempt, last_error)
+            logger.warning("LLM attempt %d failed: %s", attempt, last_error)
 
             if response.status_code not in RETRYABLE_STATUS:
                 break
 
-        raise MistralError(f"Mistral API failed after retries: {last_error}")
+        raise LLMError(f"LLM API failed after retries: {last_error}")
 
     def close(self):
         self._client.close()

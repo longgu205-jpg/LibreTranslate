@@ -4,17 +4,28 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+PROVIDER_DEFAULTS = {
+    "groq": {
+        "base_url": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+    },
+    "mistral": {
+        "base_url": "https://api.mistral.ai/v1",
+        "model": "mistral-large-latest",
+    },
+}
+
 
 class Settings:
-    mistral_api_key: str = os.getenv("MISTRAL_API_KEY", "")
-    mistral_model: str = os.getenv("MISTRAL_MODEL", "mistral-large-latest")
+    llm_provider: str = os.getenv("LLM_PROVIDER", "groq").lower()
+    llm_api_key: str = os.getenv("LLM_API_KEY", "")
+    llm_model: str = os.getenv("LLM_MODEL", "") or PROVIDER_DEFAULTS[os.getenv("LLM_PROVIDER", "groq").lower()]["model"]
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "") or PROVIDER_DEFAULTS[os.getenv("LLM_PROVIDER", "groq").lower()]["base_url"]
     host: str = os.getenv("AGENT_HOST", "127.0.0.1")
     port: int = int(os.getenv("AGENT_PORT", "8000"))
-    connect_timeout: float = float(os.getenv("MISTRAL_CONNECT_TIMEOUT", "2"))
-    short_text_timeout: float = float(os.getenv("MISTRAL_SHORT_TIMEOUT", "8"))
-    max_retries: int = int(os.getenv("MISTRAL_MAX_RETRIES", "2"))
-    short_text_chars: int = int(os.getenv("SHORT_TEXT_CHARS", "300"))
-    timeout_per_50_tokens: float = float(os.getenv("TIMEOUT_PER_50_TOKENS", "1"))
+    connect_timeout: float = float(os.getenv("LLM_CONNECT_TIMEOUT", "2"))
+    short_text_timeout: float = float(os.getenv("LLM_SHORT_TIMEOUT", "8"))
+    max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
 
 
 settings = Settings()

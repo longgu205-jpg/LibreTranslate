@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from agent.config import settings
-from agent.mistral_client import MistralClient, MistralError
+from agent.llm_client import LLMClient, LLMError
 from agent.translator import TranslatorService
 
 logging.basicConfig(
@@ -17,9 +17,9 @@ logger = logging.getLogger("agent")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.mistral_client = MistralClient()
+    app.state.llm_client = LLMClient()
     yield
-    app.state.mistral_client.close()
+    app.state.llm_client.close()
 
 
 app = FastAPI(title="Hybrid Translation Agent", version="0.1.0", lifespan=lifespan)
@@ -49,8 +49,9 @@ def detect_source_lang(text: str) -> str:
 def health():
     return {
         "status": "ok",
-        "model": settings.mistral_model,
-        "api_key_configured": bool(settings.mistral_api_key),
+        "provider": settings.llm_provider,
+        "model": settings.llm_model,
+        "api_key_configured": bool(settings.llm_api_key),
     }
 
 
@@ -64,22 +65,22 @@ def translate(request: TranslateRequest):
         return TranslateResponse(
             translated_text=request.text,
             source="passthrough",
-            model=settings.mistral_model,
+            model=settings.llm_model,
             source_lang=source_lang,
             target_lang=request.target_lang,
             elapsed_ms=0,
         )
 
-    if not settings.mistral_api_key:
+    if not settings.llm_api_key:
         raise HTTPException(
             status_code=503,
-            detail="MISTRAL_API_KEY is not configured. Set it in the .env file.",
+            detail="LLM_API_KEY is not configured. Set it in the .env file.",
         )
 
-    service = TranslatorService(app.state.mistral_client)
+    service = TranslatorService(app.state.llm_client)
     try:
         result = service.translate(request.text, source_lang, request.target_lang)
-    except MistralError as exc:
+    except LLMError as exc:
         logger.error("Translation failed: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
     return TranslateResponse(**result)

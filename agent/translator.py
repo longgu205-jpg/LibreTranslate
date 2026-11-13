@@ -1,7 +1,7 @@
 import time
 
 from agent.code_protector import CodeProtector
-from agent.mistral_client import MistralClient, MistralError
+from agent.llm_client import LLMClient, LLMError
 from agent.prompt import build_prompt
 
 
@@ -13,7 +13,7 @@ def estimate_timeout(text: str, short_text_chars: int = 300, short_timeout: floa
 
 
 class TranslatorService:
-    def __init__(self, client: MistralClient):
+    def __init__(self, client: LLMClient):
         self.client = client
 
     def translate(self, text: str, source_lang: str, target_lang: str) -> dict:
@@ -26,10 +26,9 @@ class TranslatorService:
         raw_result = self.client.chat(prompt, timeout=timeout).strip()
 
         if not protector.integrity_ok(raw_result):
-            raise MistralError("Translation output lost one or more protected placeholders")
+            raise LLMError("Translation output lost one or more protected placeholders")
 
         restored = protector.restore(raw_result)
-
         elapsed_ms = round((time.perf_counter() - started) * 1000)
         return {
             "translated_text": restored,
