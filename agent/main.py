@@ -1,7 +1,9 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from agent.config import settings
@@ -43,6 +45,11 @@ class TranslateResponse(BaseModel):
 def detect_source_lang(text: str) -> str:
     cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
     return "zh" if cjk > len(text) * 0.1 else "en"
+
+
+@app.get("/")
+def index():
+    return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
 @app.get("/health")
