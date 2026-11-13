@@ -82,6 +82,8 @@ class OfflineStub:
 
 
 class OfflineUnavailable:
+    last_error = None
+
     def translate(self, text, source_lang, target_lang):
         return None
 
