@@ -1,7 +1,29 @@
 import logging
+import re
 import time
 
 logger = logging.getLogger("agent.offline")
+
+_RULE_SENTENCE_END = re.compile(r"(?<=[。！？；])(?=[^。！？；])|(?<=[.!?;])\s+")
+
+
+def rule_based_split_sentences(self, text: str) -> list[str]:
+    parts = _RULE_SENTENCE_END.split(text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+_sbd_patched = False
+
+
+def install_rule_based_sbd() -> None:
+    global _sbd_patched
+    if _sbd_patched:
+        return
+    from argostranslate import sbd as argos_sbd
+
+    argos_sbd.MiniSBDSentencizer.split_sentences = rule_based_split_sentences
+    _sbd_patched = True
+    logger.info("Rule-based sentence splitting installed (no network dependency)")
 
 TERMINOLOGY = [
     ("視頻", "影片"),
@@ -35,6 +57,7 @@ class OfflineEngine:
         self._converter_tw = None
         self._converter_s = None
         self.last_error: str | None = None
+        install_rule_based_sbd()
 
     def _ensure_converters(self):
         if self._converter_tw is None:

@@ -58,7 +58,7 @@ curl -X POST http://127.0.0.1:8000/translate \
 python -m agent.download_models
 ```
 
-下載後即具備完整斷網能力：
+下載後即具備完整斷網能力（離線翻譯全程不上網：Argos 的神經斷句已被替換為本地標點規則斷句，不會有任何隱形下載）：
 
 - 有網路：Groq/Mistral LLM 翻譯（`cloud`）
 - API 失敗或斷網：自動切換 Argos 離線 NMT + OpenCC 簡轉繁（台灣用語）+ 術語表校正（`offline_fallback`，紅色標籤）
