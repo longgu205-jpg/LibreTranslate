@@ -27,6 +27,8 @@ TEMPLATES = {
     "en": EN_TEMPLATE,
 }
 
+PROMPT_VERSION = "v1"
+
 
 def build_prompt(target_lang: str, source_text: str) -> str:
     template = TEMPLATES.get(target_lang)

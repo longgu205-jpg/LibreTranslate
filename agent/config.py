@@ -26,6 +26,8 @@ class Settings:
     connect_timeout: float = float(os.getenv("LLM_CONNECT_TIMEOUT", "2"))
     short_text_timeout: float = float(os.getenv("LLM_SHORT_TIMEOUT", "8"))
     max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
+    cache_db_path: str = os.getenv("CACHE_DB_PATH", "data/cache.db")
+    cache_enabled: bool = os.getenv("CACHE_ENABLED", "1") == "1"
 
 
 settings = Settings()

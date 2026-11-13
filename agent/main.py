@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.translator import TranslatorService
@@ -20,6 +21,7 @@ logger = logging.getLogger("agent")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.llm_client = LLMClient()
+    app.state.cache = TranslationCache()
     yield
     app.state.llm_client.close()
 
@@ -84,7 +86,7 @@ def translate(request: TranslateRequest):
             detail="LLM_API_KEY is not configured. Set it in the .env file.",
         )
 
-    service = TranslatorService(app.state.llm_client)
+    service = TranslatorService(app.state.llm_client, app.state.cache)
     try:
         result = service.translate(request.text, source_lang, request.target_lang)
     except LLMError as exc:
