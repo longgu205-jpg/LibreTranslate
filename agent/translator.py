@@ -65,6 +65,8 @@ class TranslatorService:
                         "target_lang": target_lang,
                         "elapsed_ms": round((time.perf_counter() - started) * 1000),
                     }
+                reason = self.offline.last_error or "offline models not installed (run: python -m agent.download_models)"
+                raise LLMError(f"{exc}; offline fallback failed: {reason}")
             raise
 
         if not protector.integrity_ok(raw_result):

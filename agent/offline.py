@@ -34,6 +34,7 @@ class OfflineEngine:
     def __init__(self):
         self._converter_tw = None
         self._converter_s = None
+        self.last_error: str | None = None
 
     def _ensure_converters(self):
         if self._converter_tw is None:
@@ -63,6 +64,7 @@ class OfflineEngine:
     def translate(self, text: str, source_lang: str, target_lang: str) -> str | None:
         if not text.strip():
             return None
+        self.last_error = None
         started = time.perf_counter()
         try:
             if target_lang == "zh-TW":
@@ -88,7 +90,8 @@ class OfflineEngine:
                         len(text), (time.perf_counter() - started) * 1000,
                     )
                 return result
-        except Exception:
+        except Exception as exc:
             logger.exception("Offline translation failed")
+            self.last_error = f"{type(exc).__name__}: {exc}"
             return None
         return None
