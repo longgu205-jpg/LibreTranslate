@@ -74,3 +74,56 @@ def test_cache_disabled_bypasses(tmp_path, monkeypatch):
     second = service.translate("Hello", "en", "zh-TW")
     assert second["source"] == "cloud"
     assert FakeClient.calls == 2
+
+
+class OfflineStub:
+    def translate(self, text, source_lang, target_lang):
+        return "離線譯文。"
+
+
+class OfflineUnavailable:
+    def translate(self, text, source_lang, target_lang):
+        return None
+
+
+def test_llm_error_falls_back_to_offline(tmp_path):
+    class AlwaysFails:
+        model = "test-model"
+
+        def chat(self, prompt, timeout, temperature=0.2):
+            raise LLMError("network down")
+
+    cache = TranslationCache(db_path=str(tmp_path / "cache.db"))
+    service = TranslatorService(AlwaysFails(), cache, OfflineStub())
+
+    result = service.translate("Hello", "en", "zh-TW")
+    assert result["source"] == "offline_fallback"
+    assert result["translated_text"] == "離線譯文。"
+    assert result["model"] == "argos-offline"
+
+
+def test_offline_result_is_not_cached(tmp_path):
+    class AlwaysFails:
+        model = "test-model"
+
+        def chat(self, prompt, timeout, temperature=0.2):
+            raise LLMError("network down")
+
+    cache = TranslationCache(db_path=str(tmp_path / "cache.db"))
+    service = TranslatorService(AlwaysFails(), cache, OfflineStub())
+
+    service.translate("Hello", "en", "zh-TW")
+    assert cache.get("en", "zh-TW", "test-model", "v1", "Hello") is None
+
+
+def test_offline_unavailable_reraises_llm_error(tmp_path):
+    class AlwaysFails:
+        model = "test-model"
+
+        def chat(self, prompt, timeout, temperature=0.2):
+            raise LLMError("network down")
+
+    service = TranslatorService(AlwaysFails(), TranslationCache(db_path=str(tmp_path / "cache.db")), OfflineUnavailable())
+
+    with pytest.raises(LLMError):
+        service.translate("Hello", "en", "zh-TW")

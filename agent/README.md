@@ -50,6 +50,22 @@ curl -X POST http://127.0.0.1:8000/translate \
 }
 ```
 
+## 離線模式（Phase 2b）
+
+首次使用前，先下載離線翻譯模型（約 300MB，只需一次，需連網）：
+
+```bat
+python -m agent.download_models
+```
+
+下載後即具備完整斷網能力：
+
+- 有網路：Groq/Mistral LLM 翻譯（`cloud`）
+- API 失敗或斷網：自動切換 Argos 離線 NMT + OpenCC 簡轉繁（台灣用語）+ 術語表校正（`offline_fallback`，紅色標籤）
+- 曾翻過的句子：SQLite 快取直接回應（`cache`，綠色標籤）
+
+離線結果不寫入快取，避免離線品質污染之後的線上結果。
+
 ## 測試
 
 ```bat

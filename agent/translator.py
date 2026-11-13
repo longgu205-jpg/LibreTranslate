@@ -4,6 +4,7 @@ from agent.cache import TranslationCache
 from agent.code_protector import CodeProtector
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
+from agent.offline import OfflineEngine
 from agent.prompt import PROMPT_VERSION, build_prompt
 
 
@@ -15,9 +16,15 @@ def estimate_timeout(text: str, short_text_chars: int = 300, short_timeout: floa
 
 
 class TranslatorService:
-    def __init__(self, client: LLMClient, cache: TranslationCache | None = None):
+    def __init__(
+        self,
+        client: LLMClient,
+        cache: TranslationCache | None = None,
+        offline: OfflineEngine | None = None,
+    ):
         self.client = client
         self.cache = cache if settings.cache_enabled else None
+        self.offline = offline if settings.offline_enabled else None
 
     def translate(self, text: str, source_lang: str, target_lang: str) -> dict:
         started = time.perf_counter()
@@ -40,7 +47,21 @@ class TranslatorService:
         prompt = build_prompt(target_lang, protected_text)
         timeout = estimate_timeout(protected_text)
 
-        raw_result = self.client.chat(prompt, timeout=timeout).strip()
+        try:
+            raw_result = self.client.chat(prompt, timeout=timeout).strip()
+        except LLMError:
+            if self.offline is not None:
+                offline_result = self.offline.translate(text, source_lang, target_lang)
+                if offline_result:
+                    return {
+                        "translated_text": offline_result,
+                        "source": "offline_fallback",
+                        "model": "argos-offline",
+                        "source_lang": source_lang,
+                        "target_lang": target_lang,
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000),
+                    }
+            raise
 
         if not protector.integrity_ok(raw_result):
             raise LLMError("Translation output lost one or more protected placeholders")

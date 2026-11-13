@@ -12,8 +12,9 @@ from agent.llm_client import LLMError
 
 
 @pytest.fixture(autouse=True)
-def fake_api_key(monkeypatch):
+def fake_api_key(monkeypatch, tmp_path):
     monkeypatch.setattr("agent.main.settings.llm_api_key", "test-key")
+    monkeypatch.setattr("agent.main.settings.cache_db_path", str(tmp_path / "cache.db"))
 
 
 class FakeClient:

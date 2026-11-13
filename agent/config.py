@@ -28,6 +28,7 @@ class Settings:
     max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
     cache_db_path: str = os.getenv("CACHE_DB_PATH", "data/cache.db")
     cache_enabled: bool = os.getenv("CACHE_ENABLED", "1") == "1"
+    offline_enabled: bool = os.getenv("OFFLINE_ENABLED", "1") == "1"
 
 
 settings = Settings()

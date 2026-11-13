@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
+from agent.offline import OfflineEngine
 from agent.translator import TranslatorService
 
 logging.basicConfig(
@@ -22,6 +23,7 @@ logger = logging.getLogger("agent")
 async def lifespan(app: FastAPI):
     app.state.llm_client = LLMClient()
     app.state.cache = TranslationCache()
+    app.state.offline = OfflineEngine()
     yield
     app.state.llm_client.close()
 
@@ -61,6 +63,8 @@ def health():
         "provider": settings.llm_provider,
         "model": settings.llm_model,
         "api_key_configured": bool(settings.llm_api_key),
+        "offline_available": app.state.offline.available(),
+        "cache_entries": app.state.cache.count(),
     }
 
 
@@ -86,7 +90,7 @@ def translate(request: TranslateRequest):
             detail="LLM_API_KEY is not configured. Set it in the .env file.",
         )
 
-    service = TranslatorService(app.state.llm_client, app.state.cache)
+    service = TranslatorService(app.state.llm_client, app.state.cache, app.state.offline)
     try:
         result = service.translate(request.text, source_lang, request.target_lang)
     except LLMError as exc:
