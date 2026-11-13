@@ -199,9 +199,12 @@ const $ = id => document.getElementById(id);
 const LANG_NAMES = { en: "英文", zh: "中文", "zh-TW": "繁體中文（台灣）" };
 
 fetch("/health").then(r => r.json()).then(info => {
-  $("status").textContent = info.api_key_configured
-    ? `就緒 · ${info.provider} · ${info.model}`
-    : "⚠ 尚未設定 API 金鑰（.env 的 LLM_API_KEY）";
+  if (!info.api_key_configured) {
+    $("status").textContent = "⚠ 尚未設定 API 金鑰（.env 的 LLM_API_KEY）";
+    return;
+  }
+  const offline = info.offline_available ? "離線✓" : "離線✗（未下載模型）";
+  $("status").textContent = `就緒 · ${info.provider} · ${info.model} · ${offline} · 快取 ${info.cache_entries} 筆`;
 }).catch(() => { $("status").textContent = "無法連線到後端"; });
 
 $("input").addEventListener("input", e => {
