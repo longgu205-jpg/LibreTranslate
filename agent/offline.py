@@ -1,4 +1,5 @@
 import logging
+import time
 
 logger = logging.getLogger("agent.offline")
 
@@ -62,18 +63,31 @@ class OfflineEngine:
     def translate(self, text: str, source_lang: str, target_lang: str) -> str | None:
         if not text.strip():
             return None
+        started = time.perf_counter()
         try:
             if target_lang == "zh-TW":
                 raw = self._argos_translate(text, "en", "zh")
                 if raw is None:
+                    logger.warning("Offline en->zh model not available")
                     return None
                 self._ensure_converters()
-                return apply_terminology(self._converter_tw.convert(raw))
+                result = apply_terminology(self._converter_tw.convert(raw))
+                logger.info(
+                    "Offline en->zh-TW done: %d chars in %.0f ms",
+                    len(text), (time.perf_counter() - started) * 1000,
+                )
+                return result
 
             if target_lang == "en" and source_lang == "zh":
                 self._ensure_converters()
                 simplified = self._converter_s.convert(text)
-                return self._argos_translate(simplified, "zh", "en")
+                result = self._argos_translate(simplified, "zh", "en")
+                if result is not None:
+                    logger.info(
+                        "Offline zh->en done: %d chars in %.0f ms",
+                        len(text), (time.perf_counter() - started) * 1000,
+                    )
+                return result
         except Exception:
             logger.exception("Offline translation failed")
             return None

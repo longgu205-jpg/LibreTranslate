@@ -1,3 +1,4 @@
+import logging
 import time
 
 from agent.cache import TranslationCache
@@ -6,6 +7,8 @@ from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.offline import OfflineEngine
 from agent.prompt import PROMPT_VERSION, build_prompt
+
+logger = logging.getLogger("agent.translator")
 
 
 def estimate_timeout(text: str, short_text_chars: int = 300, short_timeout: float = 8.0) -> float:
@@ -49,8 +52,9 @@ class TranslatorService:
 
         try:
             raw_result = self.client.chat(prompt, timeout=timeout).strip()
-        except LLMError:
+        except LLMError as exc:
             if self.offline is not None:
+                logger.warning("LLM unavailable (%s), switching to offline engine", exc)
                 offline_result = self.offline.translate(text, source_lang, target_lang)
                 if offline_result:
                     return {

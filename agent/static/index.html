@@ -217,7 +217,7 @@ async function translate() {
   $("translateBtn").disabled = true;
   $("error").style.display = "none";
   $("output").textContent = "";
-  $("meta").textContent = "翻譯中…";
+  $("meta").textContent = "翻譯中…（若已斷網，離線模式可能需要 10–20 秒）";
   try {
     const resp = await fetch("/translate", {
       method: "POST",
