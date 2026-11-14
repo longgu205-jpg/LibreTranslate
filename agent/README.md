@@ -66,6 +66,19 @@ python -m agent.download_models
 
 離線結果不寫入快取，避免離線品質污染之後的線上結果。
 
+## 桌面模式（Phase 2c）
+
+用原生視窗執行（不用開瀏覽器）：
+
+```bat
+python -m agent.desktop
+```
+
+- 啟動時自動挑選空閒的 port，不會跟其他程式衝突
+- 視窗關閉 = 程式結束
+- Windows 使用內建的 WebView2（Edge）引擎；若視窗一片空白，請安裝 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
+- 純網頁模式仍然可用：`python -m agent.main`
+
 ## PDF 翻譯（Phase 3）
 
 開啟首頁下方的「PDF 翻譯」區塊：

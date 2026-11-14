@@ -13,3 +13,4 @@ tencentcloud-sdk-python-tmt==3.0.1300
 tencentcloud-sdk-python-common==3.0.1300
 opencv-python-headless==4.10.0.84
 opencv-python==4.10.0.84
+pywebview==6.2.1
