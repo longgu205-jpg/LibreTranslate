@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import fitz
 import pytest
 
+from agent.pdf_format import protect_formula_placeholders, restore_formula_placeholders
 from agent.pdf_translator import (
     build_output_pdf,
     extract_paragraphs,
@@ -129,3 +130,16 @@ def test_translate_pdf_with_page_range(sample_pdf):
     assert "Page 2" in text
     assert "Page 1" not in text
     assert "Page 3" not in text
+
+
+def test_formula_placeholders_roundtrip():
+    text = "The value {{v0}} equals {{v12}} here"
+    prepared, mapping = protect_formula_placeholders(text)
+    assert prepared == "The value __PDFPH_0__ equals __PDFPH_12__ here"
+    assert restore_formula_placeholders(prepared, mapping) == text
+
+
+def test_formula_placeholders_no_placeholder():
+    prepared, mapping = protect_formula_placeholders("plain text")
+    assert prepared == "plain text"
+    assert mapping == {}

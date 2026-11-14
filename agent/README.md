@@ -83,6 +83,16 @@ curl -X POST http://127.0.0.1:8000/translate/pdf -F "file=@doc.pdf" -F "pages=2-
 
 PDF 每個段落都會經過與文字翻譯相同的管線（快取 → LLM → 離線備援），段落多時可能需要數分鐘。
 
+### 格式保持模式（mode=format）
+
+選「格式保持（原地翻譯）」時，改用 [PDFMathTranslate](https://github.com/PDFMathTranslate/PDFMathTranslate) 引擎：在原始版面位置直接以譯文覆蓋原文，版面、圖片、表格位置盡量不變。
+
+注意：
+
+- **首次使用需要連網**下載版面辨識模型（約 40MB）與中文字型（約 20MB），之後離線可跑版面分析，但翻譯仍走快取 → LLM → 離線備援管線
+- Windows 需安裝 [Microsoft Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)（onnxruntime 依賴）
+- 個別段落翻譯失敗時會保留原文，不會中斷整份文件
+
 ## 測試
 
 ```bat

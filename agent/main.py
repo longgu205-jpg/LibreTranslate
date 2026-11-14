@@ -11,7 +11,8 @@ from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.offline import OfflineEngine
-from agent.pdf_translator import translate_pdf
+from agent.pdf_format import translate_pdf_format
+from agent.pdf_translator import parse_page_range, translate_pdf
 from agent.translator import TranslatorService
 
 logging.basicConfig(
@@ -79,8 +80,8 @@ def translate_pdf_endpoint(
 ):
     if target_lang not in ("zh-TW", "en"):
         raise HTTPException(status_code=400, detail="target_lang must be zh-TW or en")
-    if mode not in ("compare", "translation_only"):
-        raise HTTPException(status_code=400, detail="mode must be compare or translation_only")
+    if mode not in ("compare", "translation_only", "format"):
+        raise HTTPException(status_code=400, detail="mode must be compare, translation_only or format")
     if not settings.llm_api_key:
         raise HTTPException(
             status_code=503,
@@ -97,14 +98,17 @@ def translate_pdf_endpoint(
     if doc.page_count == 0:
         raise HTTPException(status_code=400, detail="PDF 沒有任何頁面")
 
+    service = TranslatorService(app.state.llm_client, app.state.cache, app.state.offline)
     try:
         all_text = " ".join(doc[i].get_text() for i in range(min(doc.page_count, 3)))
         source_lang = detect_source_lang(all_text)
-        pdf_bytes = translate_pdf(
-            doc, pages or None, source_lang, target_lang,
-            TranslatorService(app.state.llm_client, app.state.cache, app.state.offline),
-            mode=mode,
-        )
+        if mode == "format":
+            page_numbers = parse_page_range(pages or None, doc.page_count)
+            pdf_bytes = translate_pdf_format(data, page_numbers, source_lang, target_lang, service)
+        else:
+            pdf_bytes = translate_pdf(
+                doc, pages or None, source_lang, target_lang, service, mode=mode,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except LLMError as exc:
