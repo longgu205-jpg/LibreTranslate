@@ -5,8 +5,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 if getattr(sys, "frozen", False):
-    load_dotenv(Path(sys.executable).parent / ".env")
-load_dotenv()
+    load_dotenv(Path(sys.executable).parent / ".env", encoding="utf-8-sig")
+load_dotenv(encoding="utf-8-sig")
 
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
 
