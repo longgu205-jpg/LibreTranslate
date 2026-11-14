@@ -40,7 +40,7 @@ def pick_free_port(host: str | None = None) -> int:
         return sock.getsockname()[1]
 
 
-def start_server(port: int) -> uvicorn.Server:
+def start_server(port: int) -> tuple[uvicorn.Server, threading.Thread]:
     server = uvicorn.Server(
         uvicorn.Config(app, host=settings.host, port=port, log_level="warning")
     )
@@ -52,7 +52,13 @@ def start_server(port: int) -> uvicorn.Server:
         time.sleep(0.1)
     if not server.started:
         raise RuntimeError("FastAPI server failed to start within 15 seconds")
-    return server
+    return server, thread
+
+
+def shutdown_server(server: uvicorn.Server, thread: threading.Thread):
+    server.should_exit = True
+    thread.join(timeout=5)
+    os._exit(0)
 
 
 def run_desktop():
@@ -62,7 +68,7 @@ def run_desktop():
     )
     port = pick_free_port()
     logger.info("Starting server on port %d", port)
-    start_server(port)
+    server, thread = start_server(port)
 
     if os.getenv("AGENT_HEADLESS") == "1":
         logger.info(
@@ -73,7 +79,7 @@ def run_desktop():
                 time.sleep(3600)
         except KeyboardInterrupt:
             pass
-        return
+        shutdown_server(server, thread)
 
     import webview
 
@@ -85,7 +91,11 @@ def run_desktop():
         height=850,
         min_size=(700, 500),
     )
-    webview.start()
+    try:
+        webview.start()
+    finally:
+        logger.info("Window closed, shutting down")
+        shutdown_server(server, thread)
 
 
 if __name__ == "__main__":
