@@ -76,6 +76,7 @@ python -m agent.desktop
 
 - 啟動時自動挑選空閒的 port，不會跟其他程式衝突
 - 視窗關閉 = 程式結束
+- PDF 翻譯完成後會跳出**「另存新檔」對話框**，選擇儲存位置即可（網頁模式則是下載連結）
 - Windows 使用內建的 WebView2（Edge）引擎；若視窗一片空白，請安裝 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)
 - 純網頁模式仍然可用：`python -m agent.main`
 

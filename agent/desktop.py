@@ -1,3 +1,4 @@
+import base64
 import logging
 import socket
 import threading
@@ -9,6 +10,27 @@ from agent.config import settings
 from agent.main import app
 
 logger = logging.getLogger("agent.desktop")
+
+
+def write_pdf_file(path: str, data_b64: str):
+    with open(path, "wb") as fh:
+        fh.write(base64.b64decode(data_b64))
+
+
+class DesktopApi:
+    def save_pdf(self, data_b64: str, filename: str = "translated.pdf"):
+        import webview
+
+        window = webview.windows[0]
+        target = window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=filename,
+        )
+        if not target:
+            return "cancelled"
+        path = target if isinstance(target, str) else target[0]
+        write_pdf_file(path, data_b64)
+        return path
 
 
 def pick_free_port(host: str | None = None) -> int:
@@ -46,6 +68,7 @@ def run_desktop():
     webview.create_window(
         "混合翻譯 Agent",
         f"http://127.0.0.1:{port}/",
+        js_api=DesktopApi(),
         width=1100,
         height=850,
         min_size=(700, 500),

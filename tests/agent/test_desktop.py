@@ -27,3 +27,14 @@ def test_start_server_serves_health_and_index():
     index = httpx.get(f"http://127.0.0.1:{port}/", timeout=5)
     assert index.status_code == 200
     assert "混合翻譯 Agent" in index.text
+
+
+def test_write_pdf_file_decodes_base64(tmp_path):
+    import base64
+
+    from agent.desktop import write_pdf_file
+
+    payload = b"%PDF-1.4 test bytes"
+    target = tmp_path / "out.pdf"
+    write_pdf_file(str(target), base64.b64encode(payload).decode())
+    assert target.read_bytes() == payload

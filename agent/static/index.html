@@ -334,6 +334,15 @@ $("copyBtn").addEventListener("click", () => {
   setTimeout(() => { $("copyBtn").textContent = "複製"; }, 1500);
 });
 
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 $("pdfMode").addEventListener("change", e => {
   $("pdfModeHint").style.display = e.target.value === "format" ? "block" : "none";
 });
@@ -365,14 +374,26 @@ $("pdfBtn").addEventListener("click", async () => {
       return;
     }
     const blob = await resp.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "translated.pdf";
-    a.textContent = "下載翻譯後的 PDF（translated.pdf）";
-    download.appendChild(a);
-    status.style.color = "#188038";
-    status.textContent = "翻譯完成！";
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.save_pdf) {
+      const b64 = await blobToBase64(blob);
+      const result = await window.pywebview.api.save_pdf(b64, "translated.pdf");
+      if (result === "cancelled") {
+        status.style.color = "#5f6368";
+        status.textContent = "已取消儲存";
+      } else {
+        status.style.color = "#188038";
+        status.textContent = `翻譯完成！已儲存到：${result}`;
+      }
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "translated.pdf";
+      a.textContent = "下載翻譯後的 PDF（translated.pdf）";
+      download.appendChild(a);
+      status.style.color = "#188038";
+      status.textContent = "翻譯完成！";
+    }
   } catch (err) {
     status.style.color = "#d93025";
     status.textContent = "無法連線到後端，請確認伺服器正在執行";
