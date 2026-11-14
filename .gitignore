@@ -34,6 +34,7 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!agent/app.spec
 
 # Installer logs
 pip-log.txt
@@ -134,3 +135,5 @@ installed_models/
 # Misc
 api_keys.db
 suggestions.db
+# Hybrid agent local data
+data/

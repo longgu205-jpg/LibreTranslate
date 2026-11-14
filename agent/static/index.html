@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>中英翻譯_Formosalab watergu 製</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+    background: #f1f3f6;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  header {
+    width: 100%;
+    background: #fff;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  header .logo { font-size: 22px; font-weight: 700; color: #1a73e8; }
+  header .status {
+    margin-left: auto;
+    font-size: 13px;
+    padding: 4px 12px;
+    border-radius: 12px;
+    background: #e8f0fe;
+    color: #1a73e8;
+  }
+  .bar {
+    width: 100%;
+    max-width: 960px;
+    margin-top: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 16px;
+  }
+  select {
+    font-size: 15px;
+    padding: 8px 12px;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+    background: #fff;
+    color: #202124;
+    cursor: pointer;
+  }
+  #swapBtn {
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    cursor: pointer;
+    color: #5f6368;
+    padding: 6px 10px;
+    border-radius: 50%;
+  }
+  #swapBtn:hover { background: #e8eaed; }
+  .panels {
+    width: 100%;
+    max-width: 960px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 12px 16px 24px;
+  }
+  .panel {
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.08);
+    display: flex;
+    flex-direction: column;
+    min-height: 320px;
+  }
+  .panel textarea, .panel .output {
+    flex: 1;
+    padding: 20px;
+    font-size: 17px;
+    line-height: 1.7;
+    border: none;
+    outline: none;
+    resize: none;
+    color: #202124;
+    background: transparent;
+    white-space: pre-wrap;
+    overflow-y: auto;
+  }
+  .panel .output:empty::before {
+    content: "翻譯結果會顯示在這裡";
+    color: #9aa0a6;
+  }
+  .panel .foot {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-top: 1px solid #f1f3f4;
+    font-size: 13px;
+    color: #5f6368;
+  }
+  .badge {
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.cloud { background: #e8f0fe; color: #1a73e8; }
+  .badge.passthrough { background: #fef7e0; color: #b06000; }
+  .badge.cache { background: #e6f4ea; color: #137333; }
+  .badge.offline_fallback { background: #fce8e6; color: #c5221f; }
+  #copyBtn {
+    margin-left: auto;
+    border: none;
+    background: transparent;
+    color: #1a73e8;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+  #copyBtn:hover { background: #e8f0fe; }
+  .actions {
+    width: 100%;
+    max-width: 960px;
+    padding: 0 16px;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  #translateBtn {
+    background: #1a73e8;
+    color: #fff;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    padding: 12px 36px;
+    border-radius: 24px;
+    cursor: pointer;
+  }
+  #translateBtn:disabled { background: #9ac0f5; cursor: wait; }
+  #translateBtn:hover:not(:disabled) { background: #1765cc; }
+  #error {
+    color: #c5221f;
+    font-size: 14px;
+    display: none;
+  }
+  .charcount { margin-left: auto; font-size: 13px; color: #5f6368; }
+  .pdf-section {
+    width: 100%;
+    max-width: 960px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.08);
+    margin: 0 16px 32px;
+    padding: 16px 20px;
+  }
+  .pdf-section h2 { font-size: 16px; color: #202124; margin-bottom: 12px; }
+  .pdf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .pdf-row input[type="text"] {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+  }
+  #pdfBtn {
+    font-size: 15px;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1a73e8;
+    color: #fff;
+    cursor: pointer;
+  }
+  #pdfBtn:disabled { background: #9ac0f5; cursor: default; }
+  #pdfModeHint {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #b06000;
+    background: #fef7e0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: none;
+  }
+  #pdfStatus { margin-top: 10px; font-size: 13px; color: #5f6368; }
+  #pdfDownload { margin-top: 8px; }
+  #pdfDownload a { color: #1a73e8; font-size: 14px; font-weight: 600; }
+  @media (max-width: 720px) {
+    .panels { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">中英翻譯_Formosalab watergu 製</span>
+  <span class="status" id="status">連線中…</span>
+</header>
+
+<div class="bar">
+  <select id="srcLang">
+    <option value="auto" selected>自動偵測</option>
+    <option value="en">英文</option>
+    <option value="zh">中文</option>
+  </select>
+  <button id="swapBtn" title="交換語言">⇄</button>
+  <select id="tgtLang">
+    <option value="zh-TW" selected>繁體中文（台灣）</option>
+    <option value="en">English</option>
+  </select>
+</div>
+
+<div class="actions">
+  <button id="translateBtn">翻譯</button>
+  <span id="error"></span>
+  <span class="charcount" id="charcount">0 字</span>
+</div>
+
+<div class="panels">
+  <div class="panel">
+    <textarea id="input" placeholder="輸入要翻譯的文字…" autofocus></textarea>
+    <div class="foot"><span id="detected">偵測語言：—</span></div>
+  </div>
+  <div class="panel">
+    <div class="output" id="output"></div>
+    <div class="foot">
+      <span class="badge" id="badge" style="display:none"></span>
+      <span id="meta"></span>
+      <button id="copyBtn" style="display:none">複製</button>
+    </div>
+  </div>
+</div>
+
+<div class="pdf-section">
+  <h2>PDF 翻譯（英文 → 繁體中文）</h2>
+  <div class="pdf-row">
+    <input type="file" id="pdfFile" accept=".pdf">
+    <input type="text" id="pdfPages" placeholder="頁數，例如 2-3（留空 = 全部）" size="26">
+    <select id="pdfMode">
+      <option value="compare" selected>原文/譯文對照</option>
+      <option value="translation_only">純譯文（全文翻譯）</option>
+      <option value="format">格式保持（原地翻譯，實驗性）</option>
+    </select>
+    <button id="pdfBtn">上傳並翻譯</button>
+  </div>
+  <div id="pdfModeHint">⚠ 格式保持模式適合純文字文件。含圖片、表格或向量圖的文件建議改用「原文/譯文對照」；系統會自動檢查，若圖形內容流失，該頁會自動改用對照模式輸出。</div>
+  <div id="pdfStatus"></div>
+  <div id="pdfDownload"></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const LANG_NAMES = { en: "英文", zh: "中文", "zh-TW": "繁體中文（台灣）" };
+
+fetch("/health").then(r => r.json()).then(info => {
+  if (!info.api_key_configured) {
+    $("status").textContent = "⚠ 尚未設定 API 金鑰（.env 的 LLM_API_KEY）";
+    return;
+  }
+  const offline = info.offline_available ? "離線✓" : "離線✗（未下載模型）";
+  $("status").textContent = `就緒 · ${info.provider} · ${info.model} · ${offline} · 快取 ${info.cache_entries} 筆`;
+}).catch(() => { $("status").textContent = "無法連線到後端"; });
+
+$("input").addEventListener("input", e => {
+  $("charcount").textContent = `${e.target.value.length} 字`;
+});
+
+async function translate() {
+  const text = $("input").value.trim();
+  if (!text) return;
+  $("translateBtn").disabled = true;
+  $("error").style.display = "none";
+  $("output").textContent = "";
+  $("meta").textContent = "翻譯中…（若已斷網，離線模式可能需要 10–20 秒）";
+  try {
+    const resp = await fetch("/translate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        source_lang: $("srcLang").value,
+        target_lang: $("tgtLang").value,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      showError(data.detail || `錯誤 ${resp.status}`);
+      return;
+    }
+    $("output").textContent = data.translated_text;
+    $("detected").textContent = `偵測語言：${LANG_NAMES[data.source_lang] || data.source_lang}`;
+    const badge = $("badge");
+    badge.textContent = data.source;
+    badge.className = `badge ${data.source}`;
+    badge.style.display = "";
+    $("meta").textContent = `${data.model} · ${data.elapsed_ms} ms`;
+    $("copyBtn").style.display = "";
+  } catch (err) {
+    showError("無法連線到後端，請確認伺服器正在執行");
+  } finally {
+    $("translateBtn").disabled = false;
+  }
+}
+
+function showError(msg) {
+  $("error").textContent = msg;
+  $("error").style.display = "";
+  $("meta").textContent = "";
+  $("badge").style.display = "none";
+  $("copyBtn").style.display = "none";
+}
+
+$("translateBtn").addEventListener("click", translate);
+$("input").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) translate();
+});
+$("swapBtn").addEventListener("click", () => {
+  const detected = $("detected").textContent.includes("英文") ? "en"
+    : $("detected").textContent.includes("中文") ? "zh" : null;
+  const newTgt = $("srcLang").value === "auto" ? (detected || "en") : $("srcLang").value;
+  $("srcLang").value = $("tgtLang").value === "zh-TW" ? "zh" : "zh-TW";
+  const opts = [...$("tgtLang").options];
+  $("tgtLang").value = newTgt === "zh" ? "zh-TW" : newTgt;
+  $("input").value = $("output").textContent;
+  $("charcount").textContent = `${$("input").value.length} 字`;
+  $("output").textContent = "";
+  translate();
+});
+$("copyBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("output").textContent);
+  $("copyBtn").textContent = "已複製！";
+  setTimeout(() => { $("copyBtn").textContent = "複製"; }, 1500);
+});
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+$("pdfMode").addEventListener("change", e => {
+  $("pdfModeHint").style.display = e.target.value === "format" ? "block" : "none";
+});
+
+$("pdfBtn").addEventListener("click", async () => {
+  const status = $("pdfStatus");
+  const download = $("pdfDownload");
+  if (!$("pdfFile").files.length) {
+    status.style.color = "#d93025";
+    status.textContent = "請先選擇 PDF 檔案";
+    return;
+  }
+  $("pdfBtn").disabled = true;
+  status.style.color = "#5f6368";
+  status.textContent = "上傳並翻譯中…（段落較多時可能需要數分鐘，請勿關閉頁面）";
+  download.innerHTML = "";
+  try {
+    const form = new FormData();
+    form.append("file", $("pdfFile").files[0]);
+    form.append("pages", $("pdfPages").value.trim());
+    form.append("target_lang", "zh-TW");
+    form.append("mode", $("pdfMode").value);
+    const resp = await fetch("/translate/pdf", { method: "POST", body: form });
+    if (!resp.ok) {
+      let detail = `錯誤 ${resp.status}`;
+      try { detail = (await resp.json()).detail || detail; } catch (e) {}
+      status.style.color = "#d93025";
+      status.textContent = detail;
+      return;
+    }
+    const blob = await resp.blob();
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.save_pdf) {
+      const b64 = await blobToBase64(blob);
+      const result = await window.pywebview.api.save_pdf(b64, "translated.pdf");
+      if (result === "cancelled") {
+        status.style.color = "#5f6368";
+        status.textContent = "已取消儲存";
+      } else {
+        status.style.color = "#188038";
+        status.textContent = `翻譯完成！已儲存到：${result}`;
+      }
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "translated.pdf";
+      a.textContent = "下載翻譯後的 PDF（translated.pdf）";
+      download.appendChild(a);
+      status.style.color = "#188038";
+      status.textContent = "翻譯完成！";
+    }
+  } catch (err) {
+    status.style.color = "#d93025";
+    status.textContent = "無法連線到後端，請確認伺服器正在執行";
+  } finally {
+    $("pdfBtn").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
