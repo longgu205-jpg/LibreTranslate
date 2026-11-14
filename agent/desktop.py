@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 import socket
 import threading
 import time
@@ -63,10 +64,21 @@ def run_desktop():
     logger.info("Starting server on port %d", port)
     start_server(port)
 
+    if os.getenv("AGENT_HEADLESS") == "1":
+        logger.info(
+            "Headless mode: serving at http://127.0.0.1:%d (press Ctrl+C to stop)", port
+        )
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+        return
+
     import webview
 
     webview.create_window(
-        "混合翻譯 Agent",
+        "中英翻譯_Formosalab watergu 製",
         f"http://127.0.0.1:{port}/",
         js_api=DesktopApi(),
         width=1100,

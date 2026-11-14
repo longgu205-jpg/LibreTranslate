@@ -66,6 +66,20 @@ python -m agent.download_models
 
 離線結果不寫入快取，避免離線品質污染之後的線上結果。
 
+## 打包成 exe（Phase 4）
+
+在 Windows 上於專案根目錄執行：
+
+```bat
+build_exe.bat
+```
+
+- 腳本會自動安裝 PyInstaller 並依 `agent\app.spec` 建置
+- 輸出：`dist\FormosalabTranslator\FormosalabTranslator.exe`（onedir 模式，**整個資料夾都要一起帶走**）
+- exe 會從 **exe 同層目錄**讀取 `.env`（LLM_API_KEY 等），快取資料庫存在 exe 旁的 `data\cache.db`
+- 首次使用仍需連網下載離線翻譯模型（`python -m agent.download_models`）與 PDF 版面模型/字型
+- 備援：若 WebView2 視窗有問題，可執行 exe 時設 `AGENT_HEADLESS=1` 改用純伺服器模式（用瀏覽器開啟主控台顯示的網址）
+
 ## 桌面模式（Phase 2c）
 
 用原生視窗執行（不用開瀏覽器）：

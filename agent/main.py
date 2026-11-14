@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     app.state.llm_client.close()
 
 
-app = FastAPI(title="Hybrid Translation Agent", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="中英翻譯_Formosalab watergu 製", version="0.1.0", lifespan=lifespan)
 
 
 class TranslateRequest(BaseModel):

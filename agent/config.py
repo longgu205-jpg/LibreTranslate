@@ -1,8 +1,14 @@
 import os
+import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
+if getattr(sys, "frozen", False):
+    load_dotenv(Path(sys.executable).parent / ".env")
 load_dotenv()
+
+_BASE_DIR = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
 
 PROVIDER_DEFAULTS = {
     "groq": {
@@ -26,7 +32,7 @@ class Settings:
     connect_timeout: float = float(os.getenv("LLM_CONNECT_TIMEOUT", "2"))
     short_text_timeout: float = float(os.getenv("LLM_SHORT_TIMEOUT", "8"))
     max_retries: int = int(os.getenv("LLM_MAX_RETRIES", "2"))
-    cache_db_path: str = os.getenv("CACHE_DB_PATH", "data/cache.db")
+    cache_db_path: str = os.getenv("CACHE_DB_PATH", str(_BASE_DIR / "data" / "cache.db"))
     cache_enabled: bool = os.getenv("CACHE_ENABLED", "1") == "1"
     offline_enabled: bool = os.getenv("OFFLINE_ENABLED", "1") == "1"
 

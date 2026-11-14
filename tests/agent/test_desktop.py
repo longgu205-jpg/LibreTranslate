@@ -26,7 +26,7 @@ def test_start_server_serves_health_and_index():
     assert health.json()["status"] == "ok"
     index = httpx.get(f"http://127.0.0.1:{port}/", timeout=5)
     assert index.status_code == 200
-    assert "混合翻譯 Agent" in index.text
+    assert "中英翻譯_Formosalab watergu 製" in index.text
 
 
 def test_write_pdf_file_decodes_base64(tmp_path):
