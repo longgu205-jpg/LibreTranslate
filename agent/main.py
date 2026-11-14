@@ -11,7 +11,7 @@ from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.offline import OfflineEngine
-from agent.pdf_format import translate_pdf_format
+from agent.pdf_format import find_broken_pages, splice_replacement_pages, translate_pdf_format
 from agent.pdf_translator import parse_page_range, translate_pdf
 from agent.translator import TranslatorService
 
@@ -105,6 +105,20 @@ def translate_pdf_endpoint(
         if mode == "format":
             page_numbers = parse_page_range(pages or None, doc.page_count)
             pdf_bytes = translate_pdf_format(data, page_numbers, source_lang, target_lang, service)
+            out_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            broken = find_broken_pages(doc, out_doc, page_numbers)
+            if broken:
+                broken_sources = [page_numbers[i] for i in broken]
+                logger.warning(
+                    "Format mode lost content on source pages %s; falling back to comparison mode for those pages",
+                    broken_sources,
+                )
+                comp_pdf = translate_pdf(
+                    doc, ",".join(map(str, broken_sources)), source_lang, target_lang, service, mode="compare",
+                )
+                comp_doc = fitz.open(stream=comp_pdf, filetype="pdf")
+                splice_replacement_pages(out_doc, comp_doc, broken)
+                pdf_bytes = out_doc.tobytes(deflate=True, garbage=3)
         else:
             pdf_bytes = translate_pdf(
                 doc, pages or None, source_lang, target_lang, service, mode=mode,

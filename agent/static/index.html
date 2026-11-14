@@ -176,6 +176,15 @@
     cursor: pointer;
   }
   #pdfBtn:disabled { background: #9ac0f5; cursor: default; }
+  #pdfModeHint {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #b06000;
+    background: #fef7e0;
+    border-radius: 8px;
+    padding: 8px 12px;
+    display: none;
+  }
   #pdfStatus { margin-top: 10px; font-size: 13px; color: #5f6368; }
   #pdfDownload { margin-top: 8px; }
   #pdfDownload a { color: #1a73e8; font-size: 14px; font-weight: 600; }
@@ -236,6 +245,7 @@
     </select>
     <button id="pdfBtn">上傳並翻譯</button>
   </div>
+  <div id="pdfModeHint">⚠ 格式保持模式適合純文字文件。含圖片、表格或向量圖的文件建議改用「原文/譯文對照」；系統會自動檢查，若圖形內容流失，該頁會自動改用對照模式輸出。</div>
   <div id="pdfStatus"></div>
   <div id="pdfDownload"></div>
 </div>
@@ -322,6 +332,10 @@ $("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText($("output").textContent);
   $("copyBtn").textContent = "已複製！";
   setTimeout(() => { $("copyBtn").textContent = "複製"; }, 1500);
+});
+
+$("pdfMode").addEventListener("change", e => {
+  $("pdfModeHint").style.display = e.target.value === "format" ? "block" : "none";
 });
 
 $("pdfBtn").addEventListener("click", async () => {

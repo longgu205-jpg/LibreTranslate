@@ -1,6 +1,8 @@
 import logging
 import re
 
+import fitz
+
 logger = logging.getLogger("agent.pdf_format")
 
 _FORMULA_PLACEHOLDER = re.compile(r"\{\{v(\d+)\}\}")
@@ -81,4 +83,32 @@ def translate_pdf_format(pdf_bytes: bytes, page_numbers: list[int], source_lang:
         ignore_cache=True,
         model=_get_layout_model(),
     )
-    return mono
+    out_doc = fitz.open(stream=mono, filetype="pdf")
+    if page_numbers and out_doc.page_count > len(page_numbers):
+        out_doc.select([n - 1 for n in page_numbers])
+    return out_doc.tobytes(deflate=True, garbage=3)
+
+
+def page_integrity_ok(src_page, out_page) -> bool:
+    if len(out_page.get_images(full=True)) < len(src_page.get_images(full=True)):
+        return False
+    src_drawings = len(src_page.get_drawings())
+    if src_drawings > 0 and len(out_page.get_drawings()) < src_drawings * 0.8:
+        return False
+    if src_page.get_text().strip() and not out_page.get_text().strip():
+        return False
+    return True
+
+
+def find_broken_pages(doc, out_doc, page_numbers: list[int]) -> list[int]:
+    broken = []
+    for i, page_number in enumerate(page_numbers):
+        if i >= out_doc.page_count or not page_integrity_ok(doc[page_number - 1], out_doc[i]):
+            broken.append(i)
+    return broken
+
+
+def splice_replacement_pages(out_doc, comp_doc, broken_indexes: list[int]):
+    for k, i in enumerate(broken_indexes):
+        out_doc.delete_page(i)
+        out_doc.insert_pdf(comp_doc, from_page=k, to_page=k, start_at=i)

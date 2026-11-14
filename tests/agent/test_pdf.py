@@ -6,7 +6,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import fitz
 import pytest
 
-from agent.pdf_format import protect_formula_placeholders, restore_formula_placeholders
+from agent.pdf_format import (
+    find_broken_pages,
+    page_integrity_ok,
+    protect_formula_placeholders,
+    restore_formula_placeholders,
+    splice_replacement_pages,
+)
 from agent.pdf_translator import (
     build_output_pdf,
     extract_paragraphs,
@@ -143,3 +149,72 @@ def test_formula_placeholders_no_placeholder():
     prepared, mapping = protect_formula_placeholders("plain text")
     assert prepared == "plain text"
     assert mapping == {}
+
+
+def _page_with_image_and_drawing(doc, text):
+    page = doc.new_page(width=595, height=842)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 40, 30))
+    pix.set_rect(pix.irect, (200, 60, 60))
+    page.insert_image(fitz.Rect(72, 72, 152, 132), pixmap=pix)
+    page.draw_rect(fitz.Rect(200, 72, 320, 110), color=(0, 0, 0), width=1)
+    page.insert_textbox(fitz.Rect(72, 150, 523, 300), text, fontname="helv", fontsize=11)
+    return page
+
+
+def test_page_integrity_ok_passes_identical_page():
+    src = fitz.open()
+    _page_with_image_and_drawing(src, "Hello")
+    assert page_integrity_ok(src[0], src[0]) is True
+
+
+def test_page_integrity_detects_lost_image():
+    src = fitz.open()
+    _page_with_image_and_drawing(src, "Hello")
+    out = fitz.open()
+    out.new_page(width=595, height=842).insert_textbox(
+        fitz.Rect(72, 150, 523, 300), "譯文", fontname="china-t", fontsize=11
+    )
+    assert page_integrity_ok(src[0], out[0]) is False
+
+
+def test_page_integrity_detects_lost_text():
+    src = fitz.open()
+    _page_with_image_and_drawing(src, "Hello")
+    out = fitz.open()
+    page = out.new_page(width=595, height=842)
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 40, 30))
+    pix.set_rect(pix.irect, (200, 60, 60))
+    page.insert_image(fitz.Rect(72, 72, 152, 132), pixmap=pix)
+    assert page_integrity_ok(src[0], out[0]) is False
+
+
+def test_find_broken_pages_maps_to_positions():
+    src = fitz.open()
+    for i in range(3):
+        _page_with_image_and_drawing(src, f"Page {i + 1}")
+    out = fitz.open()
+    for i in range(3):
+        if i == 1:
+            out.new_page(width=595, height=842)
+        else:
+            out.insert_pdf(src, from_page=i, to_page=i)
+    broken = find_broken_pages(src, out, [1, 2, 3])
+    assert broken == [1]
+
+
+def test_splice_replacement_pages():
+    out = fitz.open()
+    for i in range(3):
+        out.new_page(width=595, height=842).insert_textbox(
+            fitz.Rect(72, 72, 523, 200), f"out {i}", fontname="helv", fontsize=11
+        )
+    comp = fitz.open()
+    for i in range(2):
+        comp.new_page(width=595, height=842).insert_textbox(
+            fitz.Rect(72, 72, 523, 200), f"comp {i}", fontname="helv", fontsize=11
+        )
+    splice_replacement_pages(out, comp, [0, 2])
+    assert out.page_count == 3
+    assert "comp 0" in out[0].get_text()
+    assert "out 1" in out[1].get_text()
+    assert "comp 1" in out[2].get_text()
