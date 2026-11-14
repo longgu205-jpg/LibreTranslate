@@ -2,14 +2,16 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+import fitz
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.offline import OfflineEngine
+from agent.pdf_translator import translate_pdf
 from agent.translator import TranslatorService
 
 logging.basicConfig(
@@ -66,6 +68,56 @@ def health():
         "offline_available": app.state.offline.available(),
         "cache_entries": app.state.cache.count(),
     }
+
+
+@app.post("/translate/pdf")
+def translate_pdf_endpoint(
+    file: UploadFile = File(...),
+    pages: str = Form(""),
+    target_lang: str = Form("zh-TW"),
+    mode: str = Form("compare"),
+):
+    if target_lang not in ("zh-TW", "en"):
+        raise HTTPException(status_code=400, detail="target_lang must be zh-TW or en")
+    if mode not in ("compare", "translation_only"):
+        raise HTTPException(status_code=400, detail="mode must be compare or translation_only")
+    if not settings.llm_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM_API_KEY is not configured. Set it in the .env file.",
+        )
+
+    data = file.file.read()
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception:
+        raise HTTPException(status_code=400, detail="不是有效的 PDF 檔案")
+    if doc.needs_pass:
+        raise HTTPException(status_code=400, detail="PDF 已加密，請先解除密碼再上傳")
+    if doc.page_count == 0:
+        raise HTTPException(status_code=400, detail="PDF 沒有任何頁面")
+
+    try:
+        all_text = " ".join(doc[i].get_text() for i in range(min(doc.page_count, 3)))
+        source_lang = detect_source_lang(all_text)
+        pdf_bytes = translate_pdf(
+            doc, pages or None, source_lang, target_lang,
+            TranslatorService(app.state.llm_client, app.state.cache, app.state.offline),
+            mode=mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except LLMError as exc:
+        logger.error("PDF translation failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    finally:
+        doc.close()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": 'attachment; filename="translated.pdf"'},
+    )
 
 
 @app.post("/translate", response_model=TranslateResponse)

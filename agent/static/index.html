@@ -149,6 +149,36 @@
     display: none;
   }
   .charcount { margin-left: auto; font-size: 13px; color: #5f6368; }
+  .pdf-section {
+    width: 100%;
+    max-width: 960px;
+    background: #fff;
+    border-radius: 12px;
+    box-shadow: 0 1px 6px rgba(0,0,0,.08);
+    margin: 0 16px 32px;
+    padding: 16px 20px;
+  }
+  .pdf-section h2 { font-size: 16px; color: #202124; margin-bottom: 12px; }
+  .pdf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .pdf-row input[type="text"] {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 1px solid #dadce0;
+    border-radius: 8px;
+  }
+  #pdfBtn {
+    font-size: 15px;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1a73e8;
+    color: #fff;
+    cursor: pointer;
+  }
+  #pdfBtn:disabled { background: #9ac0f5; cursor: default; }
+  #pdfStatus { margin-top: 10px; font-size: 13px; color: #5f6368; }
+  #pdfDownload { margin-top: 8px; }
+  #pdfDownload a { color: #1a73e8; font-size: 14px; font-weight: 600; }
   @media (max-width: 720px) {
     .panels { grid-template-columns: 1fr; }
   }
@@ -192,6 +222,21 @@
       <button id="copyBtn" style="display:none">複製</button>
     </div>
   </div>
+</div>
+
+<div class="pdf-section">
+  <h2>PDF 翻譯（英文 → 繁體中文）</h2>
+  <div class="pdf-row">
+    <input type="file" id="pdfFile" accept=".pdf">
+    <input type="text" id="pdfPages" placeholder="頁數，例如 2-3（留空 = 全部）" size="26">
+    <select id="pdfMode">
+      <option value="compare" selected>原文/譯文對照</option>
+      <option value="translation_only">純譯文（全文翻譯）</option>
+    </select>
+    <button id="pdfBtn">上傳並翻譯</button>
+  </div>
+  <div id="pdfStatus"></div>
+  <div id="pdfDownload"></div>
 </div>
 
 <script>
@@ -276,6 +321,49 @@ $("copyBtn").addEventListener("click", () => {
   navigator.clipboard.writeText($("output").textContent);
   $("copyBtn").textContent = "已複製！";
   setTimeout(() => { $("copyBtn").textContent = "複製"; }, 1500);
+});
+
+$("pdfBtn").addEventListener("click", async () => {
+  const status = $("pdfStatus");
+  const download = $("pdfDownload");
+  if (!$("pdfFile").files.length) {
+    status.style.color = "#d93025";
+    status.textContent = "請先選擇 PDF 檔案";
+    return;
+  }
+  $("pdfBtn").disabled = true;
+  status.style.color = "#5f6368";
+  status.textContent = "上傳並翻譯中…（段落較多時可能需要數分鐘，請勿關閉頁面）";
+  download.innerHTML = "";
+  try {
+    const form = new FormData();
+    form.append("file", $("pdfFile").files[0]);
+    form.append("pages", $("pdfPages").value.trim());
+    form.append("target_lang", "zh-TW");
+    form.append("mode", $("pdfMode").value);
+    const resp = await fetch("/translate/pdf", { method: "POST", body: form });
+    if (!resp.ok) {
+      let detail = `錯誤 ${resp.status}`;
+      try { detail = (await resp.json()).detail || detail; } catch (e) {}
+      status.style.color = "#d93025";
+      status.textContent = detail;
+      return;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "translated.pdf";
+    a.textContent = "下載翻譯後的 PDF（translated.pdf）";
+    download.appendChild(a);
+    status.style.color = "#188038";
+    status.textContent = "翻譯完成！";
+  } catch (err) {
+    status.style.color = "#d93025";
+    status.textContent = "無法連線到後端，請確認伺服器正在執行";
+  } finally {
+    $("pdfBtn").disabled = false;
+  }
 });
 </script>
 </body>
