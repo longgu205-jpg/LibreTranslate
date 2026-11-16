@@ -188,6 +188,16 @@
     cursor: pointer;
   }
   #micBtn:disabled, #voiceFileBtn:disabled { background: #9ac0f5; cursor: default; }
+  #liveBtn {
+    font-size: 15px;
+    padding: 8px 18px;
+    border: 1px solid #1a73e8;
+    border-radius: 8px;
+    background: #fff;
+    color: #1a73e8;
+    cursor: pointer;
+  }
+  #liveBtn:hover { background: #e8f0fe; }
   #voiceStatus { margin-top: 10px; font-size: 13px; color: #5f6368; }
   #voiceResult { margin-top: 10px; display: none; }
   #voiceResult .transcript {
@@ -287,6 +297,7 @@
     <button id="micBtn">🎤 按住說話</button>
     <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.flac,.mp4,.opus">
     <button id="voiceFileBtn">上傳語音檔並翻譯</button>
+    <button id="liveBtn">📺 即時字幕（擷取電腦聲音）</button>
   </div>
   <div id="voiceStatus">麥克風：按住按鈕說話，放開後自動辨識並翻譯。也可上傳語音檔測試（例如 Teams 錄音）。</div>
   <div id="voiceResult">
@@ -510,6 +521,20 @@ $("voiceFileBtn").addEventListener("click", () => {
   }
   const f = $("audioFile").files[0];
   sendVoiceBlob(f, f.name);
+});
+
+$("liveBtn").addEventListener("click", async () => {
+  if (window.pywebview && window.pywebview.api && window.pywebview.api.open_live_window) {
+    const result = await window.pywebview.api.open_live_window();
+    if (result === "already_open") {
+      setVoiceStatus("即時字幕視窗已開啟（螢幕最上層的小視窗）");
+    } else {
+      setVoiceStatus("已開啟即時字幕浮動視窗，把它拖到 Teams 畫面旁即可");
+    }
+  } else {
+    window.open("/live/window", "_blank", "width=580,height=280");
+    setVoiceStatus("已在新視窗開啟即時字幕（網頁模式）");
+  }
 });
 
 $("voiceCopyBtn").addEventListener("click", () => {

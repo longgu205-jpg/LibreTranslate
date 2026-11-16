@@ -38,6 +38,7 @@ for package in [
     "rapidocr_onnxruntime",
     "tiktoken",
     "webview",
+    "pyaudiowpatch",
 ]:
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)

@@ -46,6 +46,11 @@ class Settings:
     stt_model: str = os.getenv("STT_MODEL", "whisper-large-v3-turbo")
     stt_timeout: float = float(os.getenv("STT_TIMEOUT", "120"))
     stt_max_mb: int = int(os.getenv("STT_MAX_MB", "25"))
+    # Live captions (2c): system-audio loopback → VAD → STT → translate.
+    live_enabled: bool = os.getenv("LIVE_ENABLED", "1") == "1"
+    live_min_segment: float = float(os.getenv("LIVE_MIN_SEGMENT", "10"))
+    live_max_segment: float = float(os.getenv("LIVE_MAX_SEGMENT", "15"))
+    live_target_lang: str = os.getenv("LIVE_TARGET_LANG", "zh-TW")
     host: str = os.getenv("AGENT_HOST", "127.0.0.1")
     port: int = int(os.getenv("AGENT_PORT", "8000"))
     connect_timeout: float = float(os.getenv("LLM_CONNECT_TIMEOUT", "2"))

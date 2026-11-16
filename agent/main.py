@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
+from agent.live import LiveCaptionEngine, pyaudio
 from agent.offline import OfflineEngine
 from agent.pdf_format import find_broken_pages, splice_replacement_pages, translate_pdf_format
 from agent.pdf_translator import parse_page_range, translate_pdf
@@ -40,6 +41,9 @@ async def lifespan(app: FastAPI):
     app.state.offline = OfflineEngine()
     app.state.stt_client = TranscriptionClient() if settings.stt_api_key else None
     yield
+    engine = getattr(app.state, "live_engine", None)
+    if engine is not None and engine.running:
+        engine.stop()
     app.state.llm_client.close()
     if app.state.backup_client is not None:
         app.state.backup_client.close()
@@ -192,6 +196,55 @@ def translate(request: TranslateRequest):
         logger.error("Translation failed: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
     return TranslateResponse(**result)
+
+
+@app.get("/live/window")
+def live_window():
+    return FileResponse(Path(__file__).parent / "static" / "live.html")
+
+
+@app.post("/live/start")
+def live_start():
+    """開始即時字幕：擷取系統聲音 → VAD → Whisper → 翻譯。"""
+    if not settings.live_enabled:
+        raise HTTPException(status_code=403, detail="即時字幕功能已停用（LIVE_ENABLED=0）")
+    if pyaudio is None:
+        raise HTTPException(status_code=503, detail="此功能需要 Windows 與 PyAudioWPatch 套件")
+    if app.state.stt_client is None:
+        raise HTTPException(status_code=503, detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）")
+
+    engine = getattr(app.state, "live_engine", None)
+    if engine is not None and engine.running:
+        return {"status": "already_running"}
+
+    engine = LiveCaptionEngine(app.state.stt_client, make_service())
+    try:
+        engine.start()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"無法啟動即時字幕：{exc}")
+    app.state.live_engine = engine
+    return {"status": "started"}
+
+
+@app.post("/live/stop")
+def live_stop():
+    engine = getattr(app.state, "live_engine", None)
+    if engine is None or not engine.running:
+        return {"status": "not_running"}
+    engine.stop()
+    return {"status": "stopped"}
+
+
+@app.get("/live/status")
+def live_status():
+    engine = getattr(app.state, "live_engine", None)
+    if engine is None:
+        return {"running": False, "captions": [], "error": None}
+    return {
+        "running": engine.running,
+        "captions": engine.store.latest(8),
+        "error": engine.last_error,
+    }
 
 
 @app.post("/transcribe")

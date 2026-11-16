@@ -19,6 +19,26 @@ def write_pdf_file(path: str, data_b64: str):
 
 
 class DesktopApi:
+    server_port = 0  # set in run_desktop()
+
+    def open_live_window(self):
+        """開啟永遠在最上層的即時字幕浮動視窗。"""
+        import webview
+
+        existing = getattr(webview, "windows", [])
+        for window in existing[1:]:
+            if getattr(window, "title", "") == "即時字幕":
+                return "already_open"
+        webview.create_window(
+            "即時字幕",
+            f"http://127.0.0.1:{self.server_port}/live/window",
+            width=560,
+            height=260,
+            on_top=True,
+            resizable=True,
+        )
+        return "opened"
+
     def save_pdf(self, data_b64: str, filename: str = "translated.pdf"):
         import webview
 
@@ -68,6 +88,7 @@ def run_desktop():
     )
     port = pick_free_port()
     logger.info("Starting server on port %d", port)
+    DesktopApi.server_port = port
     server, thread = start_server(port)
 
     if os.getenv("AGENT_HEADLESS") == "1":
