@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from agent.llm_client import LLMClient, LLMError
 from agent.offline import OfflineEngine
 from agent.pdf_format import find_broken_pages, splice_replacement_pages, translate_pdf_format
 from agent.pdf_translator import parse_page_range, translate_pdf
+from agent.stt import ALLOWED_AUDIO_EXTENSIONS, STTError, TranscriptionClient
 from agent.translator import TranslatorService
 
 logging.basicConfig(
@@ -25,10 +27,24 @@ logger = logging.getLogger("agent")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.llm_client = LLMClient()
+    app.state.backup_client = (
+        LLMClient(
+            api_key=settings.backup_api_key,
+            model=settings.backup_model,
+            base_url=settings.backup_base_url,
+        )
+        if settings.backup_api_key
+        else None
+    )
     app.state.cache = TranslationCache()
     app.state.offline = OfflineEngine()
+    app.state.stt_client = TranscriptionClient() if settings.stt_api_key else None
     yield
     app.state.llm_client.close()
+    if app.state.backup_client is not None:
+        app.state.backup_client.close()
+    if app.state.stt_client is not None:
+        app.state.stt_client.close()
 
 
 app = FastAPI(title="中英翻譯_Formosalab watergu 製", version="0.1.0", lifespan=lifespan)
@@ -66,9 +82,18 @@ def health():
         "provider": settings.llm_provider,
         "model": settings.llm_model,
         "api_key_configured": bool(settings.llm_api_key),
+        "backup_configured": app.state.backup_client is not None,
+        "backup_model": settings.backup_model if app.state.backup_client else "",
+        "stt_available": app.state.stt_client is not None,
         "offline_available": app.state.offline.available(),
         "cache_entries": app.state.cache.count(),
     }
+
+
+def make_service() -> TranslatorService:
+    return TranslatorService(
+        app.state.llm_client, app.state.cache, app.state.offline, app.state.backup_client,
+    )
 
 
 @app.post("/translate/pdf")
@@ -98,7 +123,7 @@ def translate_pdf_endpoint(
     if doc.page_count == 0:
         raise HTTPException(status_code=400, detail="PDF 沒有任何頁面")
 
-    service = TranslatorService(app.state.llm_client, app.state.cache, app.state.offline)
+    service = make_service()
     try:
         all_text = " ".join(doc[i].get_text() for i in range(min(doc.page_count, 3)))
         source_lang = detect_source_lang(all_text)
@@ -160,13 +185,145 @@ def translate(request: TranslateRequest):
             detail="LLM_API_KEY is not configured. Set it in the .env file.",
         )
 
-    service = TranslatorService(app.state.llm_client, app.state.cache, app.state.offline)
+    service = make_service()
     try:
         result = service.translate(request.text, source_lang, request.target_lang)
     except LLMError as exc:
         logger.error("Translation failed: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc))
     return TranslateResponse(**result)
+
+
+@app.post("/transcribe")
+def transcribe_endpoint(
+    file: UploadFile = File(...),
+    language: str = Form(""),
+):
+    """語音檔轉文字（測試用）：上傳音訊 → Whisper 辨識，不翻譯。"""
+    if not settings.voice_enabled:
+        raise HTTPException(status_code=403, detail="語音功能已停用（VOICE_ENABLED=0）")
+    if app.state.stt_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）",
+        )
+
+    filename = file.filename or "audio.webm"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支援的音訊格式 {ext or filename}，可用：{', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}",
+        )
+
+    data = file.file.read()
+    max_bytes = settings.stt_max_mb * 1024 * 1024
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="音訊檔案是空的")
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"音訊檔案超過 {settings.stt_max_mb} MB 上限")
+
+    started = time.perf_counter()
+    try:
+        text = app.state.stt_client.transcribe(
+            data, filename=filename, language=language or None,
+        )
+    except STTError as exc:
+        logger.error("Transcription failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    return {
+        "text": text,
+        "model": app.state.stt_client.model,
+        "elapsed_ms": elapsed_ms,
+    }
+
+
+@app.post("/translate/voice")
+def translate_voice_endpoint(
+    file: UploadFile = File(...),
+    source_lang: str = Form("auto"),
+    target_lang: str = Form("zh-TW"),
+):
+    """語音翻譯：上傳音訊 → Whisper 辨識 → 現有翻譯管線（快取 → 雲端 → 離線）。"""
+    if not settings.voice_enabled:
+        raise HTTPException(status_code=403, detail="語音功能已停用（VOICE_ENABLED=0）")
+    if source_lang not in ("auto", "en", "zh"):
+        raise HTTPException(status_code=400, detail="source_lang must be auto, en or zh")
+    if target_lang not in ("zh-TW", "en"):
+        raise HTTPException(status_code=400, detail="target_lang must be zh-TW or en")
+    if app.state.stt_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）",
+        )
+    if not settings.llm_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="LLM_API_KEY is not configured. Set it in the .env file.",
+        )
+
+    filename = file.filename or "audio.webm"
+    ext = Path(filename).suffix.lower()
+    if ext not in ALLOWED_AUDIO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支援的音訊格式 {ext or filename}，可用：{', '.join(sorted(ALLOWED_AUDIO_EXTENSIONS))}",
+        )
+
+    data = file.file.read()
+    max_bytes = settings.stt_max_mb * 1024 * 1024
+    if len(data) == 0:
+        raise HTTPException(status_code=400, detail="音訊檔案是空的")
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"音訊檔案超過 {settings.stt_max_mb} MB 上限")
+
+    stt_started = time.perf_counter()
+    try:
+        transcript = app.state.stt_client.transcribe(
+            data, filename=filename, language=source_lang if source_lang != "auto" else None,
+        )
+    except STTError as exc:
+        logger.error("Transcription failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+    stt_elapsed_ms = round((time.perf_counter() - stt_started) * 1000)
+
+    if not transcript:
+        raise HTTPException(status_code=422, detail="語音辨識結果是空的，請確認音訊內容有說話")
+
+    detected = source_lang
+    if detected == "auto":
+        detected = detect_source_lang(transcript)
+
+    if detected == target_lang:
+        return {
+            "transcript": transcript,
+            "translated_text": transcript,
+            "source": "passthrough",
+            "model": settings.llm_model,
+            "source_lang": detected,
+            "target_lang": target_lang,
+            "elapsed_ms": 0,
+            "stt_elapsed_ms": stt_elapsed_ms,
+        }
+
+    service = make_service()
+    try:
+        result = service.translate(transcript, detected, target_lang)
+    except LLMError as exc:
+        logger.error("Voice translation failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {
+        "transcript": transcript,
+        "translated_text": result["translated_text"],
+        "source": result["source"],
+        "model": result["model"],
+        "source_lang": result["source_lang"],
+        "target_lang": result["target_lang"],
+        "elapsed_ms": result["elapsed_ms"],
+        "stt_elapsed_ms": stt_elapsed_ms,
+    }
 
 
 if __name__ == "__main__":

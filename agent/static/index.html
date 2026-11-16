@@ -109,6 +109,7 @@
     font-weight: 600;
   }
   .badge.cloud { background: #e8f0fe; color: #1a73e8; }
+  .badge.cloud_backup { background: #e6f4ea; color: #0b8043; }
   .badge.passthrough { background: #fef7e0; color: #b06000; }
   .badge.cache { background: #e6f4ea; color: #137333; }
   .badge.offline_fallback { background: #fce8e6; color: #c5221f; }
@@ -149,7 +150,7 @@
     display: none;
   }
   .charcount { margin-left: auto; font-size: 13px; color: #5f6368; }
-  .pdf-section {
+  .pdf-section, .voice-section {
     width: 100%;
     max-width: 960px;
     background: #fff;
@@ -158,6 +159,53 @@
     margin: 0 16px 32px;
     padding: 16px 20px;
   }
+  .voice-section h2 { font-size: 16px; color: #202124; margin-bottom: 12px; }
+  .voice-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  #micBtn {
+    font-size: 15px;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1a73e8;
+    color: #fff;
+    cursor: pointer;
+    user-select: none;
+    touch-action: none;
+  }
+  #micBtn.recording { background: #d93025; animation: pulse 1.2s infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .65; }
+  }
+  #audioFile { font-size: 14px; }
+  #voiceFileBtn {
+    font-size: 15px;
+    padding: 8px 18px;
+    border: none;
+    border-radius: 8px;
+    background: #1a73e8;
+    color: #fff;
+    cursor: pointer;
+  }
+  #micBtn:disabled, #voiceFileBtn:disabled { background: #9ac0f5; cursor: default; }
+  #voiceStatus { margin-top: 10px; font-size: 13px; color: #5f6368; }
+  #voiceResult { margin-top: 10px; display: none; }
+  #voiceResult .transcript {
+    font-size: 14px;
+    color: #5f6368;
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    white-space: pre-wrap;
+  }
+  #voiceResult .translation {
+    font-size: 17px;
+    color: #202124;
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+  #voiceResult .meta { margin-top: 6px; font-size: 12px; color: #5f6368; display: flex; align-items: center; gap: 8px; }
   .pdf-section h2 { font-size: 16px; color: #202124; margin-bottom: 12px; }
   .pdf-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .pdf-row input[type="text"] {
@@ -233,6 +281,25 @@
   </div>
 </div>
 
+<div class="voice-section">
+  <h2>語音翻譯（英文語音 → 繁體中文）</h2>
+  <div class="voice-row">
+    <button id="micBtn">🎤 按住說話</button>
+    <input type="file" id="audioFile" accept="audio/*,.mp3,.wav,.m4a,.webm,.ogg,.flac,.mp4,.opus">
+    <button id="voiceFileBtn">上傳語音檔並翻譯</button>
+  </div>
+  <div id="voiceStatus">麥克風：按住按鈕說話，放開後自動辨識並翻譯。也可上傳語音檔測試（例如 Teams 錄音）。</div>
+  <div id="voiceResult">
+    <div class="transcript" id="voiceTranscript"></div>
+    <div class="translation" id="voiceTranslation"></div>
+    <div class="meta">
+      <span class="badge" id="voiceBadge" style="display:none"></span>
+      <span id="voiceMeta"></span>
+      <button id="voiceCopyBtn" style="display:none">複製</button>
+    </div>
+  </div>
+</div>
+
 <div class="pdf-section">
   <h2>PDF 翻譯（英文 → 繁體中文）</h2>
   <div class="pdf-row">
@@ -260,7 +327,8 @@ fetch("/health").then(r => r.json()).then(info => {
     return;
   }
   const offline = info.offline_available ? "離線✓" : "離線✗（未下載模型）";
-  $("status").textContent = `就緒 · ${info.provider} · ${info.model} · ${offline} · 快取 ${info.cache_entries} 筆`;
+  const backup = info.backup_configured ? `備援✓(${info.backup_model})` : "備援✗";
+  $("status").textContent = `就緒 · ${info.provider} · ${info.model} · ${backup} · ${offline} · 快取 ${info.cache_entries} 筆`;
 }).catch(() => { $("status").textContent = "無法連線到後端"; });
 
 $("input").addEventListener("input", e => {
@@ -342,6 +410,113 @@ function blobToBase64(blob) {
     reader.readAsDataURL(blob);
   });
 }
+
+// ---------- 語音翻譯 ----------
+let mediaRecorder = null;
+let audioChunks = [];
+let micStream = null;
+let recording = false;
+
+function setVoiceStatus(msg, color) {
+  const el = $("voiceStatus");
+  el.textContent = msg;
+  el.style.color = color || "#5f6368";
+}
+
+function showVoiceResult(data) {
+  $("voiceTranscript").textContent = `辨識文字：${data.transcript}`;
+  $("voiceTranslation").textContent = data.translated_text;
+  const badge = $("voiceBadge");
+  badge.textContent = data.source;
+  badge.className = `badge ${data.source}`;
+  badge.style.display = "";
+  $("voiceMeta").textContent =
+    `${data.model} · 辨識 ${data.stt_elapsed_ms} ms · 翻譯 ${data.elapsed_ms} ms`;
+  $("voiceResult").style.display = "block";
+  $("voiceCopyBtn").style.display = "";
+}
+
+async function sendVoiceBlob(blob, filename) {
+  $("micBtn").disabled = true;
+  $("voiceFileBtn").disabled = true;
+  setVoiceStatus("辨識語音並翻譯中…（語音越長需要越久）");
+  try {
+    const form = new FormData();
+    form.append("file", blob, filename);
+    form.append("source_lang", $("srcLang").value);
+    form.append("target_lang", $("tgtLang").value);
+    const resp = await fetch("/translate/voice", { method: "POST", body: form });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setVoiceStatus(data.detail || `錯誤 ${resp.status}`, "#d93025");
+      return;
+    }
+    showVoiceResult(data);
+    setVoiceStatus("完成！");
+  } catch (err) {
+    setVoiceStatus("無法連線到後端，請確認伺服器正在執行", "#d93025");
+  } finally {
+    $("micBtn").disabled = false;
+    $("voiceFileBtn").disabled = false;
+  }
+}
+
+async function startRecording() {
+  if (recording) return;
+  if (!navigator.mediaDevices || !window.MediaRecorder) {
+    setVoiceStatus("此瀏覽器不支援麥克風錄音，請用語音檔上傳測試", "#d93025");
+    return;
+  }
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    setVoiceStatus("無法存取麥克風，請檢查 Windows 麥克風權限", "#d93025");
+    return;
+  }
+  audioChunks = [];
+  mediaRecorder = new MediaRecorder(micStream);
+  mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    micStream.getTracks().forEach(t => t.stop());
+    const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || "audio/webm" });
+    if (blob.size > 0) sendVoiceBlob(blob, "recording.webm");
+    else setVoiceStatus("錄音內容是空的", "#d93025");
+  };
+  mediaRecorder.start();
+  recording = true;
+  $("micBtn").classList.add("recording");
+  $("micBtn").textContent = "🔴 錄音中…放開結束";
+  setVoiceStatus("錄音中，請對麥克風說話…");
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  $("micBtn").classList.remove("recording");
+  $("micBtn").textContent = "🎤 按住說話";
+  setVoiceStatus("處理錄音中…");
+  try { mediaRecorder.stop(); } catch (e) {}
+}
+
+$("micBtn").addEventListener("pointerdown", e => { e.preventDefault(); startRecording(); });
+$("micBtn").addEventListener("pointerup", stopRecording);
+$("micBtn").addEventListener("pointerleave", stopRecording);
+$("micBtn").addEventListener("contextmenu", e => e.preventDefault());
+
+$("voiceFileBtn").addEventListener("click", () => {
+  if (!$("audioFile").files.length) {
+    setVoiceStatus("請先選擇語音檔（mp3 / wav / m4a / webm…）", "#d93025");
+    return;
+  }
+  const f = $("audioFile").files[0];
+  sendVoiceBlob(f, f.name);
+});
+
+$("voiceCopyBtn").addEventListener("click", () => {
+  navigator.clipboard.writeText($("voiceTranslation").textContent);
+  $("voiceCopyBtn").textContent = "已複製！";
+  setTimeout(() => { $("voiceCopyBtn").textContent = "複製"; }, 1500);
+});
 
 $("pdfMode").addEventListener("change", e => {
   $("pdfModeHint").style.display = e.target.value === "format" ? "block" : "none";

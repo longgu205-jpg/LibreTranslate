@@ -17,6 +17,7 @@ copy agent\.env.example .env
 ## API Key 取得
 
 - **Groq（免費，預設）**：https://console.groq.com → API Keys → Create API Key
+- **Gemini（備援引擎，免費）**：https://aistudio.google.com → Get API key（填入 `.env` 的 `LLM_API_KEY_GEMINI`）
 - **Mistral（備用）**：https://console.mistral.ai → API Keys（需付費方案才能啟用）
 
 切換供應商：改 `.env` 的 `LLM_PROVIDER`（`groq` 或 `mistral`）與 `LLM_MODEL`，程式碼不用動。
@@ -49,6 +50,42 @@ curl -X POST http://127.0.0.1:8000/translate \
   "elapsed_ms": 1234
 }
 ```
+
+## 雙引擎自動備援（Phase 2b）
+
+在 `.env` 填入 `LLM_API_KEY_GEMINI`（Gemini 免費金鎖，取得方式見上）即可啟用：
+
+- 主要引擎（Groq）失敗時（429 額度用完、5xx、斷網等），自動改用備援引擎（Gemini），結果標示 `cloud_backup`（綠色標籤）
+- 備援也失敗時，才降到離線 Argos（`offline_fallback`）
+- 備援引擎的結果同樣寫入快取，之後相同句子直接從快取回應，不消耗任何額度
+- 未填 `LLM_API_KEY_GEMINI` 時功能自動停用，行為與原本完全相同
+
+可用 `LLM_BACKUP_PROVIDER` / `LLM_BACKUP_MODEL` / `LLM_BACKUP_BASE_URL` 換掉備援引擎（預設 `gemini` / `gemini-2.5-flash`，走 Gemini 的 OpenAI 相容端點）。
+
+## 語音翻譯（Phase 2a）
+
+首頁下方「語音翻譯」區塊有兩種用法：
+
+1. **🎤 按住說話**：按住按鈕說話，放開後自動辨識並翻譯（瀏覽器錄音，webm 格式）
+2. **上傳語音檔並翻譯**：選擇語音檔（mp3 / wav / m4a / webm / ogg / flac / mp4 / opus，上限 25MB）後上傳，適合拿 Teams 錄音或任何音訊檔測試
+
+語言對沿用頁面上方的語言選擇器（預設自動偵測 → 繁體中文）。流程：**Whisper 語音轉文字 → 現有翻譯管線（快取 → Groq → Gemini 備援 → 離線）**。
+
+API：
+
+```bat
+rem 只辨識不翻譯（測試用）
+curl -X POST http://127.0.0.1:8000/transcribe -F "file=@meeting.mp3"
+
+rem 辨識 + 翻譯
+curl -X POST http://127.0.0.1:8000/translate/voice -F "file=@meeting.mp3" -F "source_lang=en" -F "target_lang=zh-TW"
+```
+
+注意：
+
+- 語音辨識使用 Groq Whisper（`whisper-large-v3-turbo`），與文字翻譯共用 `LLM_API_KEY`（也可用 `STT_API_KEY` 指定另一把金鎖）
+- Groq 免費方案 Whisper 額度：每次請求**最低計費 10 秒**音訊、每日 8 小時音訊——短句建議累積後再送（後續即時字幕模式會自動處理）
+- 設 `VOICE_ENABLED=0` 可停用語音功能
 
 ## 離線模式（Phase 2b）
 
