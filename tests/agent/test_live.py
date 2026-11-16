@@ -332,3 +332,55 @@ def test_engine_no_drain_when_no_backlog():
         assert source.dropped == 0
     finally:
         engine.stop()
+
+
+def test_low_volume_speech_is_detected():
+    """Speech barely above ambient must be caught (old 3x threshold missed it)."""
+    store = CaptionStore()
+    ambient = quiet_chunk()  # RMS 0
+    faint_ambient = loud_chunk(amplitude=300)   # RMS ~212
+    faint_speech = loud_chunk(amplitude=800)    # RMS ~565
+    script = (
+        [faint_ambient for _ in range(20)]   # ~1s calibration: floor ~212
+        + [faint_speech for _ in range(16)]  # 0.8s of quiet speech
+        + [ambient for _ in range(6)]        # pause triggers flush
+    )
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: FakeSource(script=script, tail=ambient),
+        store=store,
+        chunk_seconds=0.05, min_segment=0.3, max_segment=0.8,
+        hangover=0.1, min_speech=0.1,
+    )
+    engine.start()
+    try:
+        deadline = time.time() + 10
+        while len(store) == 0 and time.time() < deadline:
+            time.sleep(0.02)
+        assert len(store) >= 1, "quiet speech below 3x floor must still be detected"
+    finally:
+        engine.stop()
+
+
+def test_vad_disabled_sends_all_segments(monkeypatch):
+    monkeypatch.setattr("agent.live.settings.live_vad_enabled", False)
+    store = CaptionStore()
+    script = [quiet_chunk() for _ in range(10)] + [quiet_chunk() for _ in range(60)]
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: FakeSource(script=script, tail=quiet_chunk()),
+        store=store,
+        chunk_seconds=0.05, min_segment=0.5, max_segment=2.5, min_speech=0.5,
+    )
+    engine.start()
+    try:
+        deadline = time.time() + 10
+        while len(store) == 0 and time.time() < deadline:
+            time.sleep(0.02)
+        # Silence-only segments are still sent when VAD is off.
+        assert len(store) >= 1
+        assert engine.stt_client.calls, "STT must be called even for quiet audio"
+    finally:
+        engine.stop()

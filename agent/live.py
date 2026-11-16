@@ -238,6 +238,8 @@ class LiveCaptionEngine:
         self.min_speech_frames = max(1, int(min_speech / chunk_seconds))
         self.target_lang = target_lang or settings.live_target_lang
         self.catchup_interval = catchup_interval
+        self.vad_enabled = settings.live_vad_enabled
+        self.vad_multiplier = settings.live_vad_multiplier
         # Backlog beyond this is dropped to keep end-to-end latency bounded.
         self.backlog_max_seconds = 0.4
         self.backlog_keep_seconds = 0.2
@@ -316,7 +318,17 @@ class LiveCaptionEngine:
                 threshold = None
                 window_start = time.perf_counter()
                 window_audio = 0.0
+                window_peak = 0.0
                 last_catchup = window_start
+
+                def speech_threshold() -> float:
+                    # Multiplicative threshold scales with system volume;
+                    # the small absolute floors guard against digital silence.
+                    return max(
+                        noise_floor * self.vad_multiplier,
+                        noise_floor + 100.0,
+                        100.0,
+                    )
 
                 while not self._stop.is_set():
                     try:
@@ -343,10 +355,13 @@ class LiveCaptionEngine:
                                 )
                             else:
                                 logger.info(
-                                    "Capture rate: %.2fx realtime, queue %d", ratio, self._queue.qsize(),
+                                    "Capture rate: %.2fx realtime, queue %d, level %.0f / threshold %s",
+                                    ratio, self._queue.qsize(), window_peak,
+                                    f"{threshold:.0f}" if threshold is not None else "calibrating",
                                 )
                             window_start = wall
                             window_audio = 0.0
+                            window_peak = 0.0
 
                         # Catch-up: drop stale buffered audio so latency stays bounded.
                         if self.catchup_interval and wall - last_catchup >= self.catchup_interval:
@@ -362,25 +377,32 @@ class LiveCaptionEngine:
                                 )
 
                         level = rms_of(frame)
+                        window_peak = max(window_peak, level)
 
-                        if threshold is None:
-                            calibration.append(level)
-                            if len(calibration) >= 10:  # ~1s ambient calibration
-                                ordered = sorted(calibration)
-                                noise_floor = ordered[len(ordered) // 2]
-                                threshold = max(noise_floor * 3.0, noise_floor + 200.0)
-                                logger.info("VAD calibrated: noise floor %.0f, threshold %.0f", noise_floor, threshold)
-                            continue
-
-                        if level < threshold:
-                            noise_floor = noise_floor * 0.95 + level * 0.05  # adaptive floor
-                            threshold = max(noise_floor * 3.0, noise_floor + 200.0)
-
-                        if level >= threshold:
-                            speech_seen = True
-                            hangover_silence = 0
+                        if not self.vad_enabled:
+                            speech_seen = True  # send every segment regardless of level
                         else:
-                            hangover_silence += 1
+                            if threshold is None:
+                                calibration.append(level)
+                                if len(calibration) >= 10:  # ~1s ambient calibration
+                                    ordered = sorted(calibration)
+                                    noise_floor = ordered[len(ordered) // 2]
+                                    threshold = speech_threshold()
+                                    logger.info(
+                                        "VAD calibrated: noise floor %.0f, threshold %.0f",
+                                        noise_floor, threshold,
+                                    )
+                                continue
+
+                            if level < threshold:
+                                noise_floor = noise_floor * 0.95 + level * 0.05  # adaptive floor
+                                threshold = speech_threshold()
+
+                            if level >= threshold:
+                                speech_seen = True
+                                hangover_silence = 0
+                            else:
+                                hangover_silence += 1
 
                         buffer.append(frame)
                         duration = len(buffer) * self.chunk_seconds

@@ -103,7 +103,9 @@ curl -X POST http://127.0.0.1:8000/translate/voice -F "file=@meeting.mp3" -F "so
 - 擷取的是**整台電腦的系統聲音**——翻譯進行中請只開一個音源（例如只開 Teams），否則多個聲音會混在一起
 - 你的麥克風（自己說的話）不會被擷取；需要翻譯自己說的話請用「🎤 按住說話」
 - 僅支援 Windows（PyAudioWPatch）；瀏覽器網頁模式也能用，但字幕會開在新分頁而非浮動視窗
-- 設 `LIVE_ENABLED=0` 可停用；`LIVE_MIN_SEGMENT` / `LIVE_MAX_SEGMENT` 可調段落長度（預設 10 / 15 秒）
+- 設 `LIVE_ENABLED=0` 可停用；`LIVE_MIN_SEGMENT` / `LIVE_MAX_SEGMENT` 可調段落長度（預設 4 / 8 秒）
+- 字幕都沒出現時（通常是系統音量較小、語音被靜音偵測誤判）：調低 `.env` 的 `LIVE_VAD_MULTIPLIER`（預設 2.0，可試 1.5），或設 `LIVE_VAD=0` 完全關閉靜音偵測（每 8 秒固定送一段，較耗額度但保證有字幕）
+- 終端機 log 的 `level X / threshold Y` 可看出目前音量與門檻的相對關係（level 長期低於 threshold = 門檻太高）
 
 ## 離線模式（Phase 2b）
 
