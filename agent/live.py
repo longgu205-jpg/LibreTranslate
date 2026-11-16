@@ -56,6 +56,15 @@ def detect_lang(text: str) -> str:
     return "zh" if cjk > len(text) * 0.1 else "en"
 
 
+# Split sentences while keeping the punctuation at the end of each sentence.
+_SENTENCE_SPLIT = __import__("re").compile(r"(?<=[。！？；!?;])|(?<=[.!?])\s+")
+
+
+def split_sentences(text: str) -> list[str]:
+    parts = [p.strip() for p in _SENTENCE_SPLIT.split(text) if p and p.strip()]
+    return parts or ([text.strip()] if text.strip() else [])
+
+
 class CaptionStore:
     """Thread-safe ring buffer of recent subtitle lines."""
 
@@ -91,7 +100,13 @@ class CaptionStore:
 
 
 class LoopbackSource:
-    """WASAPI loopback capture of the default speakers (Windows only)."""
+    """WASAPI loopback capture of the default speakers (Windows only).
+
+    Reads small 20ms blocks: large frames_per_buffer values make the
+    Realtek/WASAPI loopback deliver data far slower than realtime.
+    """
+
+    READ_SECONDS = 0.02
 
     def __init__(self, chunk_seconds: float = 0.1):
         self.chunk_seconds = chunk_seconds
@@ -108,7 +123,7 @@ class LoopbackSource:
             device = self._pyaudio.get_default_wasapi_loopback()
             self.channels = max(1, int(device.get("maxInputChannels", 2)))
             self.sample_rate = int(device.get("defaultSampleRate", 48000))
-            frames = int(self.sample_rate * self.chunk_seconds)
+            frames = max(64, int(self.sample_rate * self.READ_SECONDS))
             self._stream = self._pyaudio.open(
                 format=pyaudio.paInt16,
                 channels=self.channels,
@@ -127,7 +142,7 @@ class LoopbackSource:
             raise LiveCaptureError(f"無法開啟系統聲音擷取：{exc}") from exc
 
     def read(self) -> bytes:
-        return self._stream.read(int(self.sample_rate * self.chunk_seconds), exception_on_overflow=False)
+        return self._stream.read(max(64, int(self.sample_rate * self.READ_SECONDS)), exception_on_overflow=False)
 
     def _cleanup(self):
         if self._stream is not None:
@@ -263,11 +278,16 @@ class LiveCaptionEngine:
         try:
             with self.source_factory() as source:
                 channels, rate = source.channels, source.sample_rate
+                # Small reads (20ms) aggregated into ~100ms VAD frames.
+                frame_bytes = int(rate * self.chunk_seconds) * channels * 2
+                pending = b""
                 buffer: list[bytes] = []
                 speech_seen = False
                 noise_floor = 0.0
                 calibration = []
                 threshold = None
+                window_start = time.perf_counter()
+                window_audio = 0.0
 
                 while not self._stop.is_set():
                     try:
@@ -277,44 +297,64 @@ class LiveCaptionEngine:
                         logger.error(self._error)
                         break
 
-                    level = rms_of(chunk)
+                    pending += chunk
+                    while len(pending) >= frame_bytes:
+                        frame, pending = pending[:frame_bytes], pending[frame_bytes:]
 
-                    if threshold is None:
-                        calibration.append(level)
-                        if len(calibration) >= 10:  # ~1s ambient calibration
-                            ordered = sorted(calibration)
-                            noise_floor = ordered[len(ordered) // 2]
+                        # Watchdog: verify capture keeps up with realtime.
+                        window_audio += self.chunk_seconds
+                        wall = time.perf_counter()
+                        if wall - window_start >= 10.0:
+                            elapsed = wall - window_start
+                            ratio = window_audio / elapsed
+                            if ratio < 0.8:
+                                logger.warning(
+                                    "Capture running behind: %.2fx realtime (%.1fs audio in %.1fs wall)",
+                                    ratio, window_audio, elapsed,
+                                )
+                            else:
+                                logger.info("Capture rate: %.2fx realtime", ratio)
+                            window_start = wall
+                            window_audio = 0.0
+
+                        level = rms_of(frame)
+
+                        if threshold is None:
+                            calibration.append(level)
+                            if len(calibration) >= 10:  # ~1s ambient calibration
+                                ordered = sorted(calibration)
+                                noise_floor = ordered[len(ordered) // 2]
+                                threshold = max(noise_floor * 3.0, noise_floor + 200.0)
+                                logger.info("VAD calibrated: noise floor %.0f, threshold %.0f", noise_floor, threshold)
+                            continue
+
+                        if level < threshold:
+                            noise_floor = noise_floor * 0.95 + level * 0.05  # adaptive floor
                             threshold = max(noise_floor * 3.0, noise_floor + 200.0)
-                            logger.info("VAD calibrated: noise floor %.0f, threshold %.0f", noise_floor, threshold)
-                        continue
 
-                    if level < threshold:
-                        noise_floor = noise_floor * 0.95 + level * 0.05  # adaptive floor
-                        threshold = max(noise_floor * 3.0, noise_floor + 200.0)
-
-                    if level >= threshold:
-                        speech_seen = True
-                        hangover_silence = 0
-                    else:
-                        hangover_silence += 1
-
-                    buffer.append(chunk)
-                    duration = len(buffer) * self.chunk_seconds
-                    if duration >= self.max_segment:
-                        # Hard cap: flush if the segment contains speech, otherwise drop it.
-                        if speech_seen:
-                            self._flush(buffer, channels, rate)
+                        if level >= threshold:
+                            speech_seen = True
+                            hangover_silence = 0
                         else:
-                            buffer.clear()
-                        speech_seen = False
-                        hangover_silence = 0
-                    elif (
-                        speech_seen and duration >= self.min_segment
-                        and hangover_silence >= self.hangover_frames
-                    ):
-                        self._flush(buffer, channels, rate)
-                        speech_seen = False
-                        hangover_silence = 0
+                            hangover_silence += 1
+
+                        buffer.append(frame)
+                        duration = len(buffer) * self.chunk_seconds
+                        if duration >= self.max_segment:
+                            # Hard cap: flush if the segment contains speech, otherwise drop it.
+                            if speech_seen:
+                                self._flush(buffer, channels, rate)
+                            else:
+                                buffer.clear()
+                            speech_seen = False
+                            hangover_silence = 0
+                        elif (
+                            speech_seen and duration >= self.min_segment
+                            and hangover_silence >= self.hangover_frames
+                        ):
+                            self._flush(buffer, channels, rate)
+                            speech_seen = False
+                            hangover_silence = 0
         except LiveCaptureError as exc:
             self._error = str(exc)
             logger.error(self._error)
@@ -357,9 +397,23 @@ class LiveCaptionEngine:
             logger.warning("Live translation failed: %s", exc)
             self.store.add(transcript, f"（翻譯失敗：{exc}）", "error", "error", 0)
             return
-        self.store.add(
-            transcript, result["translated_text"], result["model"], result["source"], result["elapsed_ms"],
-        )
+
+        # Show the translation sentence by sentence (subtitle rhythm).
+        translation_parts = split_sentences(result["translated_text"])
+        transcript_parts = split_sentences(transcript)
+        if len(translation_parts) > 1:
+            for index, part in enumerate(translation_parts):
+                src = (
+                    transcript_parts[index]
+                    if len(transcript_parts) == len(translation_parts)
+                    else (transcript if index == 0 else "")
+                )
+                self.store.add(src, part, result["model"], result["source"], result["elapsed_ms"])
+        else:
+            self.store.add(
+                transcript, result["translated_text"], result["model"], result["source"], result["elapsed_ms"],
+            )
         logger.info(
-            "Live caption ready (%.1fs audio): %s...", duration, result["translated_text"][:40],
+            "Live caption ready (%.1fs audio, %d lines): %s...",
+            duration, len(translation_parts), result["translated_text"][:40],
         )

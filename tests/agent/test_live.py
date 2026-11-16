@@ -210,3 +210,56 @@ def test_stt_failure_is_swallowed():
     )
     engine._process_segment(b"wav-bytes", 1.0)
     assert len(store) == 0
+
+
+def test_split_sentences_zh():
+    from agent.live import split_sentences
+
+    parts = split_sentences("NVIDIA 對 AI 很有興趣。而 Jensen，他的想法是什麼？沒有人知道。")
+    assert parts == [
+        "NVIDIA 對 AI 很有興趣。",
+        "而 Jensen，他的想法是什麼？",
+        "沒有人知道。",
+    ]
+
+
+def test_split_sentences_en():
+    from agent.live import split_sentences
+
+    parts = split_sentences("Hello there. This is a test! And one more")
+    assert parts == ["Hello there.", "This is a test!", "And one more"]
+
+
+def test_split_sentences_single():
+    from agent.live import split_sentences
+
+    assert split_sentences("一句話沒有標點") == ["一句話沒有標點"]
+    assert split_sentences("") == []
+
+
+def test_process_segment_splits_translation_into_lines():
+    class MultiService:
+        def translate(self, text, source_lang, target_lang):
+            return {
+                "translated_text": "第一句。第二句！第三句？",
+                "source": "cloud",
+                "model": "m",
+                "source_lang": source_lang,
+                "target_lang": target_lang,
+                "elapsed_ms": 5,
+            }
+
+    store = CaptionStore()
+    engine = LiveCaptionEngine(
+        FakeSTT("Sentence one. Sentence two. Sentence three."),
+        MultiService(),
+        source_factory=lambda: FakeSource(),
+        store=store,
+        chunk_seconds=0.05, min_segment=0.5, max_segment=1.0,
+    )
+    engine._process_segment(b"wav", 1.0)
+    items = store.latest(10)
+    assert [i["translated_text"] for i in items] == ["第一句。", "第二句！", "第三句？"]
+    assert [i["transcript"] for i in items] == [
+        "Sentence one.", "Sentence two.", "Sentence three.",
+    ]
