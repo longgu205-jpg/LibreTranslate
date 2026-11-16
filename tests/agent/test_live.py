@@ -263,3 +263,72 @@ def test_process_segment_splits_translation_into_lines():
     assert [i["transcript"] for i in items] == [
         "Sentence one.", "Sentence two.", "Sentence three.",
     ]
+
+
+class BacklogSource(FakeSource):
+    """FakeSource that reports a configurable unread backlog."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.available = 0
+        self.dropped = 0
+
+    def read_available(self):
+        return self.available
+
+    def drain(self, frames_to_drop):
+        self.dropped += frames_to_drop
+        self.available = max(0, self.available - frames_to_drop)
+
+
+def test_engine_drains_stale_audio_backlog():
+    store = CaptionStore()
+    source = BacklogSource(
+        script=[quiet_chunk() for _ in range(10)] + [loud_chunk() for _ in range(30)],
+        tail=quiet_chunk(),
+    )
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: source,
+        store=store,
+        chunk_seconds=0.05,
+        min_segment=0.2,
+        max_segment=0.4,
+        hangover=0.05,
+        min_speech=0.05,
+        catchup_interval=0.01,
+    )
+    source.available = 16000  # 1.0s of unread audio at 16 kHz
+    engine.start()
+    try:
+        deadline = time.time() + 10
+        while source.dropped == 0 and time.time() < deadline:
+            time.sleep(0.02)
+        # Keeps 0.2s, drops the remaining 0.8s = 12800 frames.
+        assert source.dropped == 12800
+        assert source.available == 3200
+    finally:
+        engine.stop()
+
+
+def test_engine_no_drain_when_no_backlog():
+    store = CaptionStore()
+    source = BacklogSource(script=[quiet_chunk() for _ in range(10)], tail=quiet_chunk())
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: source,
+        store=store,
+        chunk_seconds=0.05, min_segment=0.5, max_segment=1.0,
+        catchup_interval=0.01,
+    )
+    engine.start()
+    try:
+        deadline = time.time() + 3
+        while len(source._script) > 0 and time.time() < deadline:
+            time.sleep(0.02)
+        time.sleep(0.2)
+        assert source.dropped == 0
+    finally:
+        engine.stop()

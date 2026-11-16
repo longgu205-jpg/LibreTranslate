@@ -144,6 +144,23 @@ class LoopbackSource:
     def read(self) -> bytes:
         return self._stream.read(max(64, int(self.sample_rate * self.READ_SECONDS)), exception_on_overflow=False)
 
+    def read_available(self) -> int:
+        """Frames waiting unread in the audio buffer (0 if unknown)."""
+        try:
+            return self._stream.get_read_available()
+        except Exception:
+            return 0
+
+    def drain(self, frames_to_drop: int):
+        """Read and discard stale frames so latency never accumulates."""
+        while frames_to_drop > 0 and self._stream is not None:
+            n = min(frames_to_drop, int(self.sample_rate * 0.5))
+            try:
+                self._stream.read(n, exception_on_overflow=False)
+            except Exception:
+                return
+            frames_to_drop -= n
+
     def _cleanup(self):
         if self._stream is not None:
             try:
@@ -183,6 +200,12 @@ class FakeSource:
             return self._script.pop(0)
         return self._tail
 
+    def read_available(self) -> int:
+        return 0
+
+    def drain(self, frames_to_drop: int):
+        pass
+
     def __exit__(self, *exc):
         return False
 
@@ -202,6 +225,7 @@ class LiveCaptionEngine:
         hangover: float = 1.5,
         min_speech: float = 2.0,
         target_lang: str | None = None,
+        catchup_interval: float = 2.0,
     ):
         self.stt_client = stt_client
         self.service = service
@@ -213,7 +237,11 @@ class LiveCaptionEngine:
         self.hangover_frames = max(1, int(hangover / chunk_seconds))
         self.min_speech_frames = max(1, int(min_speech / chunk_seconds))
         self.target_lang = target_lang or settings.live_target_lang
-        self._queue: queue.Queue = queue.Queue(maxsize=4)
+        self.catchup_interval = catchup_interval
+        # Backlog beyond this is dropped to keep end-to-end latency bounded.
+        self.backlog_max_seconds = 0.4
+        self.backlog_keep_seconds = 0.2
+        self._queue: queue.Queue = queue.Queue(maxsize=2)
         self._stop = threading.Event()
         self._threads: list[threading.Thread] = []
         self._state_lock = threading.Lock()
@@ -288,6 +316,7 @@ class LiveCaptionEngine:
                 threshold = None
                 window_start = time.perf_counter()
                 window_audio = 0.0
+                last_catchup = window_start
 
                 while not self._stop.is_set():
                     try:
@@ -313,9 +342,24 @@ class LiveCaptionEngine:
                                     ratio, window_audio, elapsed,
                                 )
                             else:
-                                logger.info("Capture rate: %.2fx realtime", ratio)
+                                logger.info(
+                                    "Capture rate: %.2fx realtime, queue %d", ratio, self._queue.qsize(),
+                                )
                             window_start = wall
                             window_audio = 0.0
+
+                        # Catch-up: drop stale buffered audio so latency stays bounded.
+                        if self.catchup_interval and wall - last_catchup >= self.catchup_interval:
+                            last_catchup = wall
+                            backlog_frames = source.read_available()
+                            backlog_seconds = backlog_frames / rate if rate else 0.0
+                            if backlog_seconds > self.backlog_max_seconds:
+                                excess = backlog_frames - int(rate * self.backlog_keep_seconds)
+                                source.drain(excess)
+                                logger.info(
+                                    "Dropped %.2fs of stale audio (backlog was %.2fs)",
+                                    excess / rate if rate else 0.0, backlog_seconds,
+                                )
 
                         level = rms_of(frame)
 

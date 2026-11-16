@@ -9,7 +9,7 @@
     font-family: "Microsoft JhengHei", "Noto Sans TC", sans-serif;
     background: rgba(20, 22, 26, 0.88);
     color: #fff;
-    min-height: 100vh;
+    height: 100vh;
     display: flex;
     flex-direction: column;
     padding: 12px 16px;
@@ -43,11 +43,19 @@
   #stopBtn:hover { background: #757a7f; }
   #captions {
     flex: 1 1 auto;
-    overflow-y: auto;
+    min-height: 0;
+    overflow-y: scroll;
     display: flex;
     flex-direction: column;
     gap: 10px;
   }
+  #captions::-webkit-scrollbar { width: 8px; }
+  #captions::-webkit-scrollbar-thumb {
+    background: #5f6368;
+    border-radius: 4px;
+  }
+  #captions::-webkit-scrollbar-thumb:hover { background: #80868b; }
+  #captions::-webkit-scrollbar-track { background: rgba(255,255,255,.06); border-radius: 4px; }
   .line { border-left: 3px solid #1a73e8; padding-left: 10px; }
   .line .transcript {
     font-size: 12px;
@@ -103,6 +111,7 @@ async function poll() {
     const hint = $("hint");
     if (hint) hint.remove();
     const box = $("captions");
+    const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
     for (const c of fresh) {
       const line = document.createElement("div");
       line.className = "line";
@@ -118,8 +127,8 @@ async function poll() {
       line.append(transcript, translation, meta);
       box.appendChild(line);
     }
-    while (box.children.length > 12) box.removeChild(box.firstChild);
-    box.scrollTop = box.scrollHeight;
+    while (box.children.length > 30) box.removeChild(box.firstChild);
+    if (nearBottom) box.scrollTop = box.scrollHeight;
   } catch (err) {
     setState("無法連線到後端", "err");
   }

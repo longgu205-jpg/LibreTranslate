@@ -33,7 +33,7 @@ class DesktopApi:
             "即時字幕",
             f"http://127.0.0.1:{self.server_port}/live/window",
             width=560,
-            height=260,
+            height=320,
             on_top=True,
             resizable=True,
         )
