@@ -127,7 +127,7 @@ async function poll() {
       line.append(transcript, translation, meta);
       box.appendChild(line);
     }
-    while (box.children.length > 30) box.removeChild(box.firstChild);
+    // Keep every caption until the window is closed; the scrollbar handles history.
     if (nearBottom) box.scrollTop = box.scrollHeight;
   } catch (err) {
     setState("無法連線到後端", "err");
