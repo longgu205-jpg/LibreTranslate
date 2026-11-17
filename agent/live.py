@@ -138,8 +138,25 @@ class LoopbackSource:
             )
             return self
         except Exception as exc:
+            self._log_audio_devices()
             self._cleanup()
             raise LiveCaptureError(f"無法開啟系統聲音擷取：{exc}") from exc
+
+    def _log_audio_devices(self):
+        """Dump every audio device when opening fails, for diagnosis."""
+        if self._pyaudio is None:
+            return
+        try:
+            logger.error("Audio devices found (%d):", self._pyaudio.get_device_count())
+            for i in range(self._pyaudio.get_device_count()):
+                info = self._pyaudio.get_device_info_by_index(i)
+                logger.error(
+                    "  device %d: %s (in %s, out %s, %s Hz)",
+                    i, info.get("name"), info.get("maxInputChannels"),
+                    info.get("maxOutputChannels"), info.get("defaultSampleRate"),
+                )
+        except Exception:
+            pass
 
     def read(self) -> bytes:
         return self._stream.read(max(64, int(self.sample_rate * self.READ_SECONDS)), exception_on_overflow=False)

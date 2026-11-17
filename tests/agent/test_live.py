@@ -448,3 +448,16 @@ def test_stall_failsafe_recovers_captures():
         assert len(store) >= 1, "failsafe must recover speech below a bad threshold"
     finally:
         engine.stop()
+
+
+def test_device_logging_never_raises():
+    """The device dump on open-failure must not mask the original error."""
+    from agent.live import LoopbackSource
+
+    class BrokenPyAudio:
+        def get_device_count(self):
+            raise RuntimeError("boom")
+
+    src = LoopbackSource()
+    src._pyaudio = BrokenPyAudio()
+    src._log_audio_devices()  # must not raise

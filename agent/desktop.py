@@ -1,4 +1,5 @@
 import base64
+import faulthandler
 import logging
 import os
 import socket
@@ -86,6 +87,8 @@ def run_desktop():
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # 行車記錄器：C 層原生崩潰（閃退）時把 Python 呼叫堆疊印到主控台。
+    faulthandler.enable()
     port = pick_free_port()
     logger.info("Starting server on port %d", port)
     DesktopApi.server_port = port

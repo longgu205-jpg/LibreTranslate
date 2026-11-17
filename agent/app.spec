@@ -38,7 +38,7 @@ for package in [
     "rapidocr_onnxruntime",
     "tiktoken",
     "webview",
-    "pyaudiowpatch",
+    "pyaudio",  # PyAudioWPatch 的模組名就叫 pyaudio（分支沿用同名模組）
 ]:
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
