@@ -188,6 +188,10 @@
     cursor: pointer;
   }
   #micBtn:disabled, #voiceFileBtn:disabled { background: #9ac0f5; cursor: default; }
+  /* 離線防呆：語音功能鎖住時的灰色樣式 */
+  body.offline #micBtn, body.offline #voiceFileBtn, body.offline #liveBtn {
+    background: #dadce0; color: #80868b; cursor: not-allowed;
+  }
   #liveBtn {
     font-size: 15px;
     padding: 8px 18px;
@@ -422,6 +426,34 @@ function blobToBase64(blob) {
   });
 }
 
+// ---------- 離線防呆：語音功能鎖定/解鎖 ----------
+let voiceOnline = true;
+const VOICE_HINT_ONLINE = "麥克風：按住按鈕說話，放開後自動辨識並翻譯。也可上傳語音檔測試（例如 Teams 錄音）。";
+
+function setVoiceLock(online) {
+  if (voiceOnline === online) return;
+  voiceOnline = online;
+  ["micBtn", "voiceFileBtn", "liveBtn"].forEach(id => { $(id).disabled = !online; });
+  $("audioFile").disabled = !online;
+  document.body.classList.toggle("offline", !online);
+  if (!online) {
+    setVoiceStatus("⛔ 離線中——語音功能需要網路連線，恢復上線後自動解鎖", "#d93025");
+  } else {
+    setVoiceStatus(VOICE_HINT_ONLINE);
+  }
+}
+
+async function pollOnline() {
+  try {
+    const info = await (await fetch("/health")).json();
+    setVoiceLock(!!info.online);
+  } catch {
+    setVoiceLock(false);  // 後端都連不上，視同離線
+  }
+}
+pollOnline();
+setInterval(pollOnline, 5000);
+
 // ---------- 語音翻譯 ----------
 let mediaRecorder = null;
 let audioChunks = [];
@@ -448,6 +480,7 @@ function showVoiceResult(data) {
 }
 
 async function sendVoiceBlob(blob, filename) {
+  if (!voiceOnline) { setVoiceStatus("⛔ 離線中——語音功能需要網路連線", "#d93025"); return; }
   $("micBtn").disabled = true;
   $("voiceFileBtn").disabled = true;
   setVoiceStatus("辨識語音並翻譯中…（語音越長需要越久）");
@@ -474,6 +507,7 @@ async function sendVoiceBlob(blob, filename) {
 
 async function startRecording() {
   if (recording) return;
+  if (!voiceOnline) { setVoiceStatus("⛔ 離線中——語音功能需要網路連線", "#d93025"); return; }
   if (!navigator.mediaDevices || !window.MediaRecorder) {
     setVoiceStatus("此瀏覽器不支援麥克風錄音，請用語音檔上傳測試", "#d93025");
     return;
@@ -524,6 +558,7 @@ $("voiceFileBtn").addEventListener("click", () => {
 });
 
 $("liveBtn").addEventListener("click", async () => {
+  if (!voiceOnline) { setVoiceStatus("⛔ 離線中——語音功能需要網路連線", "#d93025"); return; }
   if (window.pywebview && window.pywebview.api && window.pywebview.api.open_live_window) {
     const result = await window.pywebview.api.open_live_window();
     if (result === "already_open") {

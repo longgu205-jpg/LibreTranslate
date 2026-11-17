@@ -188,3 +188,45 @@ def test_translate_voice_disabled():
         assert response.status_code == 403
     finally:
         main_module.settings.voice_enabled = original
+
+
+def test_transcribe_locked_when_offline(monkeypatch):
+    monkeypatch.setattr("agent.main.is_online", lambda *a, **kw: False)
+    client = make_client()
+    app.state.stt_client = FakeSTT()
+    response = client.post(
+        "/transcribe", files={"file": ("a.mp3", b"fake-audio", "audio/mpeg")},
+    )
+    assert response.status_code == 503
+    assert "離線" in response.json()["detail"]
+
+
+def test_translate_voice_locked_when_offline(monkeypatch):
+    monkeypatch.setattr("agent.main.is_online", lambda *a, **kw: False)
+    client = make_client()
+    app.state.stt_client = FakeSTT()
+    response = client.post(
+        "/translate/voice",
+        files={"file": ("a.mp3", b"fake-audio", "audio/mpeg")},
+        data={"source_lang": "en", "target_lang": "zh-TW"},
+    )
+    assert response.status_code == 503
+    assert "離線" in response.json()["detail"]
+
+
+def test_live_start_locked_when_offline(monkeypatch):
+    monkeypatch.setattr("agent.main.is_online", lambda *a, **kw: False)
+    monkeypatch.setattr("agent.main.settings.live_enabled", True)
+    monkeypatch.setattr("agent.main.pyaudio", object())  # pretend Windows
+    client = make_client()
+    app.state.stt_client = FakeSTT()
+    response = client.post("/live/start")
+    assert response.status_code == 503
+    assert "離線" in response.json()["detail"]
+
+
+def test_health_reports_online_flag():
+    client = make_client()
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["online"] is True  # conftest fakes the check

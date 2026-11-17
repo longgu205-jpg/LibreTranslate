@@ -12,6 +12,7 @@ from agent.cache import TranslationCache
 from agent.config import settings
 from agent.llm_client import LLMClient, LLMError
 from agent.live import LiveCaptionEngine, pyaudio
+from agent.netcheck import is_online
 from agent.offline import OfflineEngine
 from agent.pdf_format import find_broken_pages, splice_replacement_pages, translate_pdf_format
 from agent.pdf_translator import parse_page_range, translate_pdf
@@ -23,6 +24,14 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("agent")
+
+_OFFLINE_MSG = "目前離線，語音功能需要網路連線"
+
+
+def _require_online():
+    """Guard for online-only voice features (STT); fast, cached check."""
+    if not is_online(settings.stt_base_url):
+        raise HTTPException(status_code=503, detail=_OFFLINE_MSG)
 
 
 @asynccontextmanager
@@ -89,6 +98,7 @@ def health():
         "backup_configured": app.state.backup_client is not None,
         "backup_model": settings.backup_model if app.state.backup_client else "",
         "stt_available": app.state.stt_client is not None,
+        "online": is_online(settings.stt_base_url),
         "offline_available": app.state.offline.available(),
         "cache_entries": app.state.cache.count(),
     }
@@ -212,6 +222,7 @@ def live_start():
         raise HTTPException(status_code=503, detail="此功能需要 Windows 與 PyAudioWPatch 套件")
     if app.state.stt_client is None:
         raise HTTPException(status_code=503, detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）")
+    _require_online()
 
     engine = getattr(app.state, "live_engine", None)
     if engine is not None and engine.running:
@@ -260,6 +271,7 @@ def transcribe_endpoint(
             status_code=503,
             detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）",
         )
+    _require_online()
 
     filename = file.filename or "audio.webm"
     ext = Path(filename).suffix.lower()
@@ -310,6 +322,7 @@ def translate_voice_endpoint(
             status_code=503,
             detail="尚未設定語音辨識金鎖（.env 的 STT_API_KEY 或 LLM_API_KEY）",
         )
+    _require_online()
     if not settings.llm_api_key:
         raise HTTPException(
             status_code=503,

@@ -140,9 +140,12 @@ $("stopBtn").addEventListener("click", async () => {
 });
 
 fetch("/live/start", { method: "POST" })
-  .then(r => r.json())
-  .then(() => setState("擷取中 — 播放英文聲音即可（Teams / YT）", "on"))
-  .catch(() => setState("無法啟動即時字幕", "err"));
+  .then(async r => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { setState(data.detail || "無法啟動即時字幕", "err"); return; }
+    setState("擷取中 — 播放英文聲音即可（Teams / YT）", "on");
+  })
+  .catch(() => setState("無法連線到後端", "err"));
 
 setInterval(poll, 1000);
 poll();
