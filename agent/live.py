@@ -226,6 +226,7 @@ class LiveCaptionEngine:
         min_speech: float = 2.0,
         target_lang: str | None = None,
         catchup_interval: float = 2.0,
+        stall_timeout: float | None = None,
     ):
         self.stt_client = stt_client
         self.service = service
@@ -240,6 +241,11 @@ class LiveCaptionEngine:
         self.catchup_interval = catchup_interval
         self.vad_enabled = settings.live_vad_enabled
         self.vad_multiplier = settings.live_vad_multiplier
+        # Failsafe: if no segment is flushed for this long, start halving the
+        # VAD threshold so a miscalibrated floor can never black out captions.
+        self.stall_timeout = (
+            stall_timeout if stall_timeout is not None else settings.live_stall_timeout
+        )
         # Backlog beyond this is dropped to keep end-to-end latency bounded.
         self.backlog_max_seconds = 0.4
         self.backlog_keep_seconds = 0.2
@@ -249,6 +255,9 @@ class LiveCaptionEngine:
         self._state_lock = threading.Lock()
         self._running = False
         self._error: str | None = None
+        # Diagnostics written by the capture thread (read via /live/status or tests).
+        self.last_noise_floor: float | None = None
+        self.last_threshold: float | None = None
 
     # -- lifecycle ---------------------------------------------------------
     @property
@@ -320,6 +329,8 @@ class LiveCaptionEngine:
                 window_audio = 0.0
                 window_peak = 0.0
                 last_catchup = window_start
+                audio_since_flush = 0.0
+                failsafe_factor = 1.0
 
                 def speech_threshold() -> float:
                     # Multiplicative threshold scales with system volume;
@@ -357,7 +368,9 @@ class LiveCaptionEngine:
                                 logger.info(
                                     "Capture rate: %.2fx realtime, queue %d, level %.0f / threshold %s",
                                     ratio, self._queue.qsize(), window_peak,
-                                    f"{threshold:.0f}" if threshold is not None else "calibrating",
+                                    f"{threshold * failsafe_factor:.0f}"
+                                    if threshold is not None
+                                    else "calibrating",
                                 )
                             window_start = wall
                             window_audio = 0.0
@@ -388,6 +401,9 @@ class LiveCaptionEngine:
                                     ordered = sorted(calibration)
                                     noise_floor = ordered[len(ordered) // 2]
                                     threshold = speech_threshold()
+                                    audio_since_flush = 0.0
+                                    self.last_noise_floor = noise_floor
+                                    self.last_threshold = threshold
                                     logger.info(
                                         "VAD calibrated: noise floor %.0f, threshold %.0f",
                                         noise_floor, threshold,
@@ -395,10 +411,38 @@ class LiveCaptionEngine:
                                 continue
 
                             if level < threshold:
-                                noise_floor = noise_floor * 0.95 + level * 0.05  # adaptive floor
+                                # Adaptive floor: rise SLOWLY (a loud start must not
+                                # absorb speech into the floor) but fall FAST so the
+                                # threshold recovers quickly when noise stops.
+                                if level > noise_floor:
+                                    noise_floor = noise_floor * 0.9975 + level * 0.0025
+                                else:
+                                    noise_floor = noise_floor * 0.95 + level * 0.05
                                 threshold = speech_threshold()
+                                self.last_noise_floor = noise_floor
+                                self.last_threshold = threshold
 
-                            if level >= threshold:
+                            # Failsafe: when no segment has been flushed for a
+                            # while (measured in audio time), halve the effective
+                            # threshold every stall_timeout seconds until speech
+                            # gets through again. A miscalibrated floor can then
+                            # never black out captions for more than a few stalls.
+                            audio_since_flush += self.chunk_seconds
+                            if self.stall_timeout and audio_since_flush > self.stall_timeout:
+                                new_factor = max(
+                                    0.5 ** int(audio_since_flush / self.stall_timeout),
+                                    0.0625,
+                                )
+                                if new_factor < failsafe_factor:
+                                    failsafe_factor = new_factor
+                                    logger.warning(
+                                        "No captions for %.1fs of audio, VAD failsafe: "
+                                        "threshold lowered to %.0f",
+                                        audio_since_flush, threshold * failsafe_factor,
+                                    )
+                            effective_threshold = threshold * failsafe_factor
+
+                            if level >= effective_threshold:
                                 speech_seen = True
                                 hangover_silence = 0
                             else:
@@ -410,6 +454,8 @@ class LiveCaptionEngine:
                             # Hard cap: flush if the segment contains speech, otherwise drop it.
                             if speech_seen:
                                 self._flush(buffer, channels, rate)
+                                audio_since_flush = 0.0
+                                failsafe_factor = 1.0
                             else:
                                 buffer.clear()
                             speech_seen = False
@@ -419,6 +465,8 @@ class LiveCaptionEngine:
                             and hangover_silence >= self.hangover_frames
                         ):
                             self._flush(buffer, channels, rate)
+                            audio_since_flush = 0.0
+                            failsafe_factor = 1.0
                             speech_seen = False
                             hangover_silence = 0
         except LiveCaptureError as exc:

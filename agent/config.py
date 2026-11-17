@@ -53,6 +53,7 @@ class Settings:
     live_target_lang: str = os.getenv("LIVE_TARGET_LANG", "zh-TW")
     live_vad_enabled: bool = os.getenv("LIVE_VAD", "1") == "1"
     live_vad_multiplier: float = float(os.getenv("LIVE_VAD_MULTIPLIER", "2.0"))
+    live_stall_timeout: float = float(os.getenv("LIVE_STALL_TIMEOUT", "15"))
     host: str = os.getenv("AGENT_HOST", "127.0.0.1")
     port: int = int(os.getenv("AGENT_PORT", "8000"))
     connect_timeout: float = float(os.getenv("LLM_CONNECT_TIMEOUT", "2"))

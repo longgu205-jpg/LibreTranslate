@@ -106,6 +106,7 @@ curl -X POST http://127.0.0.1:8000/translate/voice -F "file=@meeting.mp3" -F "so
 - 設 `LIVE_ENABLED=0` 可停用；`LIVE_MIN_SEGMENT` / `LIVE_MAX_SEGMENT` 可調段落長度（預設 4 / 8 秒）
 - 字幕都沒出現時（通常是系統音量較小、語音被靜音偵測誤判）：調低 `.env` 的 `LIVE_VAD_MULTIPLIER`（預設 2.0，可試 1.5），或設 `LIVE_VAD=0` 完全關閉靜音偵測（每 8 秒固定送一段，較耗額度但保證有字幕）
 - 終端機 log 的 `level X / threshold Y` 可看出目前音量與門檻的相對關係（level 長期低於 threshold = 門檻太高）
+- 內建兩道防護：①噪音底「上升慢、下降快」，開頭大聲音訊不會把門檻墊到蓋過講話；②保險絲——若超過 `LIVE_STALL_TIMEOUT` 秒（預設 15）沒有產出任何字幕，門檻每段時間自動減半直到恢復（log 會出現 `VAD failsafe`）
 
 ## 離線模式（Phase 2b）
 

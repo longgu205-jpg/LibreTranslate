@@ -384,3 +384,67 @@ def test_vad_disabled_sends_all_segments(monkeypatch):
         assert engine.stt_client.calls, "STT must be called even for quiet audio"
     finally:
         engine.stop()
+
+
+def test_noise_floor_does_not_absorb_speech():
+    """B fix: a floor calibrated during loud audio must not chase sustained
+    speech upward (the old 0.05 EMA pushed the threshold above the speech
+    level within seconds, blacking out captions)."""
+    store = CaptionStore()
+    loud_ambient = loud_chunk(amplitude=3000)   # RMS ~2121 -> threshold ~4242
+    speech = loud_chunk(amplitude=6600)         # RMS ~4667, just above threshold
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: FakeSource(
+            script=[loud_ambient for _ in range(20)] + [speech for _ in range(100)],
+            tail=quiet_chunk(),
+        ),
+        store=store,
+        chunk_seconds=0.05, min_segment=0.3, max_segment=1000.0,
+        hangover=100.0, min_speech=0.1,
+        stall_timeout=0,  # failsafe off: isolate the floor behaviour
+    )
+    engine.start()
+    try:
+        deadline = time.time() + 5
+        while engine.last_threshold is None and time.time() < deadline:
+            time.sleep(0.01)
+        assert engine.last_threshold is not None, "VAD must calibrate"
+        time.sleep(0.3)  # let the speech frames flow through the VAD
+        # Old code: floor absorbs speech -> ~4650. New code: slow rise -> ~2700.
+        assert engine.last_noise_floor < 3200, (
+            f"noise floor absorbed speech: {engine.last_noise_floor:.0f}"
+        )
+    finally:
+        engine.stop()
+
+
+def test_stall_failsafe_recovers_captures():
+    """C fix: speech trapped below a miscalibrated threshold must still be
+    flushed once the failsafe halves the threshold (audio-time based)."""
+    store = CaptionStore()
+    loud_ambient = loud_chunk(amplitude=3000)   # RMS ~2121 -> threshold ~4242
+    faint_speech = loud_chunk(amplitude=3500)   # RMS ~2475, below threshold
+    script = (
+        [loud_ambient for _ in range(20)]    # calibration: floor 2121
+        + [faint_speech for _ in range(60)]  # 3s of speech the VAD rejects
+        + [quiet_chunk() for _ in range(6)]  # pause
+    )
+    engine = LiveCaptionEngine(
+        FakeSTT(),
+        FakeService(),
+        source_factory=lambda: FakeSource(script=script, tail=quiet_chunk()),
+        store=store,
+        chunk_seconds=0.05, min_segment=0.5, max_segment=2.0,
+        hangover=0.1, min_speech=0.1,
+        stall_timeout=1.0,  # audio seconds without a flush
+    )
+    engine.start()
+    try:
+        deadline = time.time() + 10
+        while len(store) == 0 and time.time() < deadline:
+            time.sleep(0.02)
+        assert len(store) >= 1, "failsafe must recover speech below a bad threshold"
+    finally:
+        engine.stop()
