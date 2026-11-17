@@ -38,7 +38,7 @@ for package in [
     "rapidocr_onnxruntime",
     "tiktoken",
     "webview",
-    "pyaudio",  # PyAudioWPatch 的模組名就叫 pyaudio（分支沿用同名模組）
+    "pyaudiowpatch",  # WASAPI loopback 套件（模組名就是 pyaudiowpatch，沒有 pyaudio）
 ]:
     try:
         pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)

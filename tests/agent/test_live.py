@@ -510,3 +510,100 @@ def test_find_loopback_device_raises_without_candidates():
     src._pyaudio = FakePyAudioDevices(devices)
     with pytest.raises(LiveCaptureError):
         src._find_loopback_device()
+
+
+class FakeLadderPyAudio(FakePyAudioDevices):
+    """Fake pyaudiowpatch module whose open() fails for the first N attempts."""
+
+    paInt16 = 8
+    sample_size = 2
+
+    def __init__(self, devices, fail_first=1):
+        super().__init__(devices)
+        self._fail_first = fail_first
+        self.open_calls = []
+
+    def PyAudio(self):
+        # pyaudio at module level IS this fake instance, so pyaudio.PyAudio()
+        # must return the configured instance itself (constructor stand-in).
+        return self
+
+    @staticmethod
+    def get_portaudio_version_text():
+        return "PortAudio V19.7.0-devel (fake)"
+
+    @staticmethod
+    def get_sample_size(_fmt):
+        return FakeLadderPyAudio.sample_size
+
+    def get_default_wasapi_loopback(self):
+        raise RuntimeError("no default loopback")
+
+    def open(self, **kwargs):
+        self.open_calls.append(kwargs)
+        if len(self.open_calls) <= self._fail_first:
+            raise OSError(-9996, "Invalid device")
+        return object()
+
+
+def test_open_fallback_ladder_recovers_on_invalid_device(monkeypatch):
+    import agent.live as live_mod
+    from agent.live import LoopbackSource
+
+    devices = [
+        {"index": 1, "name": "喇叭 [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 48000.0, "hostApi": 1},
+    ]
+    fake = FakeLadderPyAudio(devices, fail_first=1)
+    monkeypatch.setattr(live_mod, "pyaudio", fake)
+    src = LoopbackSource()
+    with src:
+        assert src.sample_rate == 48000
+        assert src.channels == 2
+    # 第一組參數失敗後，第二組（官方 README 寫法）必須被嘗試
+    assert len(fake.open_calls) == 2
+    assert fake.open_calls[1]["frames_per_buffer"] == 2
+
+
+def test_open_fallback_ladder_tries_alternate_devices(monkeypatch):
+    import agent.live as live_mod
+    from agent.live import LoopbackSource
+
+    devices = [
+        {"index": 1, "name": "喇叭 [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 48000.0, "hostApi": 1},
+        {"index": 5, "name": "耳機 [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 44100.0, "hostApi": 1},
+    ]
+    fake = FakeLadderPyAudio(devices, fail_first=3)
+    monkeypatch.setattr(live_mod, "pyaudio", fake)
+    src = LoopbackSource()
+    with src:
+        # 前三組（同一裝置三種 fpb）失敗後，退到第二顆 loopback 裝置
+        assert fake.open_calls[-1]["input_device_index"] == 5
+        assert src.sample_rate == 44100
+    assert len(fake.open_calls) == 4
+
+
+def test_open_fallback_ladder_raises_when_all_attempts_fail(monkeypatch):
+    import agent.live as live_mod
+    from agent.live import LiveCaptureError, LoopbackSource
+
+    devices = [
+        {"index": 1, "name": "喇叭 [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 48000.0, "hostApi": 1},
+    ]
+
+    class AlwaysFail(FakeLadderPyAudio):
+        def open(self, **kwargs):
+            self.open_calls.append(kwargs)
+            raise OSError(-9996, "Invalid device")
+
+    fake = AlwaysFail(devices)
+    monkeypatch.setattr(live_mod, "pyaudio", fake)
+    src = LoopbackSource()
+    with pytest.raises(LiveCaptureError):
+        with src:
+            pass
+    # 同一裝置三種 fpb 全部嘗試過
+    assert len(fake.open_calls) == 3
