@@ -120,7 +120,9 @@ class LoopbackSource:
             raise LiveCaptureError("PyAudioWPatch 未安裝（僅支援 Windows）")
         try:
             self._pyaudio = pyaudio.PyAudio()
-            device = self._pyaudio.get_default_wasapi_loopback()
+            # 自行掃描裝置清單，不依賴 get_default_wasapi_loopback()：
+            # 打包後的 exe 曾選到沒有輸入通道的裝置（-9996 Invalid device）。
+            device = self._find_loopback_device()
             self.channels = max(1, int(device.get("maxInputChannels", 2)))
             self.sample_rate = int(device.get("defaultSampleRate", 48000))
             frames = max(64, int(self.sample_rate * self.READ_SECONDS))
@@ -133,14 +135,49 @@ class LoopbackSource:
                 input_device_index=int(device["index"]),
             )
             logger.info(
-                "Loopback capture started: %s (%d Hz, %d ch)",
-                device.get("name", "?"), self.sample_rate, self.channels,
+                "Loopback capture started: %s (index %s, %d Hz, %d ch)",
+                device.get("name", "?"), device.get("index"),
+                self.sample_rate, self.channels,
             )
             return self
         except Exception as exc:
             self._log_audio_devices()
             self._cleanup()
             raise LiveCaptureError(f"無法開啟系統聲音擷取：{exc}") from exc
+
+    def _find_loopback_device(self) -> dict:
+        """Find a usable '[Loopback]' input device, preferring WASAPI + 48kHz."""
+        try:
+            wasapi_index = int(
+                self._pyaudio.get_host_api_info_by_type(pyaudio.paWASAPI).get("index", -1)
+            )
+        except Exception:
+            wasapi_index = -1
+        candidates = []
+        for i in range(self._pyaudio.get_device_count()):
+            info = self._pyaudio.get_device_info_by_index(i)
+            name = str(info.get("name", ""))
+            if "[Loopback]" not in name:
+                continue
+            if int(info.get("maxInputChannels", 0)) <= 0:
+                continue  # 沒有輸入通道的裝置開啟必失敗
+            candidates.append(info)
+        if not candidates:
+            raise LiveCaptureError("找不到系統聲音迴路裝置（[Loopback]）")
+        candidates.sort(
+            key=lambda info: (
+                int(info.get("hostApi", -1)) == wasapi_index,
+                float(info.get("defaultSampleRate", 0)),
+            ),
+            reverse=True,
+        )
+        chosen = candidates[0]
+        logger.info(
+            "Loopback device chosen: %s (index %s, WASAPI %s)",
+            chosen.get("name"), chosen.get("index"),
+            int(chosen.get("hostApi", -1)) == wasapi_index,
+        )
+        return chosen
 
     def _log_audio_devices(self):
         """Dump every audio device when opening fails, for diagnosis."""

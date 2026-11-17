@@ -461,3 +461,52 @@ def test_device_logging_never_raises():
     src = LoopbackSource()
     src._pyaudio = BrokenPyAudio()
     src._log_audio_devices()  # must not raise
+
+
+class FakePyAudioDevices:
+    """Mimics a PyAudio instance with a WASAPI loopback device present."""
+    paWASAPI = 99
+
+    def __init__(self, devices, wasapi_index=1):
+        self._devices = devices
+        self._wasapi = wasapi_index
+
+    def get_device_count(self):
+        return len(self._devices)
+
+    def get_device_info_by_index(self, i):
+        return self._devices[i]
+
+    def get_host_api_info_by_type(self, _type):
+        return {"index": self._wasapi}
+
+
+def test_find_loopback_device_skips_output_only_and_prefers_wasapi():
+    from agent.live import LoopbackSource
+
+    devices = [
+        {"index": 0, "name": "喇叭 (Realtek) ", "maxInputChannels": 0,
+         "maxOutputChannels": 2, "defaultSampleRate": 44100.0, "hostApi": 0},
+        {"index": 1, "name": "喇叭 (Realtek) [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 44100.0, "hostApi": 0},
+        {"index": 2, "name": "喇叭 (Realtek) [Loopback]", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 48000.0, "hostApi": 1},
+    ]
+    src = LoopbackSource()
+    src._pyaudio = FakePyAudioDevices(devices)
+    chosen = src._find_loopback_device()
+    # WASAPI (hostApi 1) + 48000 Hz wins; output-only device must be ignored.
+    assert chosen["index"] == 2
+
+
+def test_find_loopback_device_raises_without_candidates():
+    from agent.live import LiveCaptureError, LoopbackSource
+
+    devices = [
+        {"index": 0, "name": "麥克風", "maxInputChannels": 2,
+         "maxOutputChannels": 0, "defaultSampleRate": 44100.0, "hostApi": 0},
+    ]
+    src = LoopbackSource()
+    src._pyaudio = FakePyAudioDevices(devices)
+    with pytest.raises(LiveCaptureError):
+        src._find_loopback_device()

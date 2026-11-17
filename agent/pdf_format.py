@@ -82,6 +82,9 @@ def translate_pdf_format(pdf_bytes: bytes, page_numbers: list[int], source_lang:
         thread=2,
         ignore_cache=True,
         model=_get_layout_model(),
+        # subset_fonts 會在 MuPDF 原生層（fz_run_page）發生 access violation
+        # 閃退（尤其打包後的 exe），關掉只影響檔案大小，不影響內容。
+        skip_subset_fonts=True,
     )
     out_doc = fitz.open(stream=mono, filetype="pdf")
     if page_numbers and out_doc.page_count > len(page_numbers):

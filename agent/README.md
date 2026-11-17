@@ -60,7 +60,7 @@ curl -X POST http://127.0.0.1:8000/translate \
 - 備援引擎的結果同樣寫入快取，之後相同句子直接從快取回應，不消耗任何額度
 - 未填 `LLM_API_KEY_GEMINI` 時功能自動停用，行為與原本完全相同
 
-可用 `LLM_BACKUP_PROVIDER` / `LLM_BACKUP_MODEL` / `LLM_BACKUP_BASE_URL` 換掉備援引擎（預設 `gemini` / `gemini-2.5-flash`，走 Gemini 的 OpenAI 相容端點）。
+可用 `LLM_BACKUP_PROVIDER` / `LLM_BACKUP_MODEL` / `LLM_BACKUP_BASE_URL` 換掉備援引擎（預設 `gemini` / `gemini-3.8-flash`，走 Gemini 的 OpenAI 相容端點）。
 
 ## 語音翻譯（Phase 2a）
 
