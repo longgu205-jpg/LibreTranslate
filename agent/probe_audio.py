@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Standalone probe: does WASAPI loopback open work in this environment?
+"""Standalone probe: which open() parameter sets work here?
 
-Runs the same sequence of open() attempts used by agent.live, one variant at
-a time, and prints a PASS/FAIL summary. Built both as a plain script (dev)
-and as a tiny PyInstaller exe to compare dev vs frozen environments.
+Delta from v1: v1 hand-coded frames_per_buffer=2 (README style) and drew
+false conclusions on machines where tiny buffers are rejected by WASAPI.
+This version tries a parameter matrix labelled per attempt and prints a
+PASS/FAIL summary, runnable as plain script (dev) and via PyInstaller exe.
 """
 import ctypes
 import sys
 import threading
 import traceback
 
+COINIT_MULTITHREADED = 0x0
+COINIT_APARTMENTTHREADED = 0x2
+
 
 def log(msg):
     print(msg, flush=True)
 
 
-COINIT_MULTITHREADED = 0x0
-COINIT_APARTMENTTHREADED = 0x2
-
-
-def open_loopback(pa, info):
+def try_open(pa, info, fpb, label):
     import pyaudiowpatch as pyaudio
 
     kwargs = {
@@ -28,33 +28,34 @@ def open_loopback(pa, info):
         "rate": int(float(info["defaultSampleRate"])),
         "input": True,
         "input_device_index": int(info["index"]),
-        "frames_per_buffer": pyaudio.get_sample_size(pyaudio.paInt16),
     }
-    log("    open kwargs: %s" % kwargs)
+    if fpb is not None:
+        kwargs["frames_per_buffer"] = fpb
+    log("  %-28s open(nb_frames=%s, fpb=%r)" % (label, int(info["index"]), fpb))
     stream = pa.open(**kwargs)
     data = stream.read(480, exception_on_overflow=False)
     stream.stop_stream()
     stream.close()
-    log("    read %d bytes OK" % len(data))
+    log("    -> PASS (read %d bytes)" % len(data))
+    return True
 
 
-def run_in_thread(name, setup, pa, info):
-    """Run one open() attempt on a fresh thread; return True/False."""
+def attempt(pa, info, fpb, label, com_mode=None):
+    """Run one attempt on a fresh thread; return True/False."""
     result = {}
 
     def worker():
         try:
-            if setup is not None:
-                hr = ctypes.windll.ole32.CoInitializeEx(None, setup)
-                log("    CoInitializeEx(0x%X) -> HRESULT 0x%08X" % (setup, hr & 0xFFFFFFFF))
-            open_loopback(pa, info)
+            if com_mode is not None:
+                hr = ctypes.windll.ole32.CoInitializeEx(None, com_mode)
+                log("    CoInitializeEx(0x%X) -> 0x%08X" % (com_mode, hr & 0xFFFFFFFF))
+            try_open(pa, info, fpb, label)
             result["ok"] = True
         except Exception as exc:
-            result["err"] = exc
             traceback.print_exc()
-            log("    FAILED: %r" % (exc,))
+            log("    -> FAIL: %r" % (exc,))
 
-    t = threading.Thread(target=worker, name=name, daemon=True)
+    t = threading.Thread(target=worker, name="probe-" + label.split()[0], daemon=True)
     t.start()
     t.join()
     return bool(result.get("ok"))
@@ -78,7 +79,7 @@ def main():
         count = pa.get_device_count()
         log("[enum] device count: %d" % count)
         loopbacks = []
-        plain_inputs = []
+        mics = []
         for i in range(count):
             try:
                 info = pa.get_device_info_by_index(i)
@@ -90,31 +91,48 @@ def main():
                 % (i, info["name"], info["maxInputChannels"],
                    info["maxOutputChannels"], info["defaultSampleRate"])
             )
-            if "[Loopback]" in str(info.get("name", "")) and info["maxInputChannels"] > 0:
+            name = str(info.get("name", ""))
+            if "[Loopback]" in name and info["maxInputChannels"] > 0:
                 loopbacks.append(info)
-            elif info["maxInputChannels"] > 0:
-                plain_inputs.append(info)
+            elif info["maxInputChannels"] > 0 and "音效對應表" not in name and \
+                    "Sound Mapper" not in name:
+                mics.append(info)
         if not loopbacks:
             log("[result] FAIL: no [Loopback] device found")
             return
         target = loopbacks[0]
-        log("[enum] target: %s (index %s)" % (target["name"], target["index"]))
+        mic = mics[0] if mics else None
+        log("[enum] loopback target: %s (index %s)" % (target["name"], target["index"]))
 
-        results = {}
-        log("[test A] fresh thread, no explicit COM init")
-        results["A plain thread"] = run_in_thread("probe-A", None, pa, target)
-        log("[test B] fresh thread + CoInitializeEx(MTA)")
-        results["B MTA"] = run_in_thread("probe-B", COINIT_MULTITHREADED, pa, target)
-        log("[test C] fresh thread + CoInitializeEx(STA)")
-        results["C STA"] = run_in_thread("probe-C", COINIT_APARTMENTTHREADED, pa, target)
-        if plain_inputs:
-            mic = plain_inputs[0]
-            log("[test D] plain input device %s (index %s), no COM init"
-                % (mic["name"], mic["index"]))
-            results["D mic"] = run_in_thread("probe-D-mic", None, pa, mic)
+        rate = int(float(target["defaultSampleRate"]))
+        fpb_20ms = max(64, int(rate * 0.02))
+        results = []
+
+        log("[test 1] fpb=%d (app's 20ms), plain thread" % fpb_20ms)
+        results.append(("loop fpb%dfresh" % fpb_20ms, attempt(pa, target, fpb_20ms, "1-fresh")))
+        log("[test 2] fpb=%d, MAIN thread" % fpb_20ms)
+        try:
+            try_open(pa, target, fpb_20ms, "2-main")
+            results.append(("loop fpb%d main" % fpb_20ms, True))
+        except Exception:
+            traceback.print_exc()
+            results.append(("loop fpb%d main" % fpb_20ms, False))
+        log("[test 3] fpb=256")
+        results.append(("loop fpb256", attempt(pa, target, 256, "3-fpb256")))
+        log("[test 4] fpb=None (PortAudio default)")
+        results.append(("loop fpbNone", attempt(pa, target, None, "4-fpbNone")))
+        log("[test 5] fpb=2 (README style)")
+        results.append(("loop fpb2", attempt(pa, target, 2, "5-fpb2")))
+        log("[test 6] fpb=%d + CoInitializeEx(MTA)" % fpb_20ms)
+        results.append(("loop MTA", attempt(pa, target, fpb_20ms, "6-mta", COINIT_MULTITHREADED)))
+        log("[test 7] fpb=%d + CoInitializeEx(STA)" % fpb_20ms)
+        results.append(("loop STA", attempt(pa, target, fpb_20ms, "7-sta", COINIT_APARTMENTTHREADED)))
+        if mic is not None:
+            log("[test 8] mic %s (index %s), fpb=%d" % (mic["name"], mic["index"], fpb_20ms))
+            results.append(("mic", attempt(pa, mic, fpb_20ms, "8-mic")))
 
         log("[summary] " + ", ".join("%s=%s" % (k, "PASS" if v else "FAIL")
-                                     for k, v in results.items()))
+                                     for k, v in results))
     finally:
         try:
             pa.terminate()
