@@ -35,6 +35,7 @@ MANIFEST
 *.manifest
 *.spec
 !agent/app.spec
+!agent/probe.spec
 
 # Installer logs
 pip-log.txt
