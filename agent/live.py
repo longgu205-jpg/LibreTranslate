@@ -121,7 +121,7 @@ class LoopbackSource:
         try:
             self._pyaudio = pyaudio.PyAudio()
             try:
-                logger.info("PortAudio version: %s", self._pyaudio.get_portaudio_version_text())
+                logger.info("PortAudio version: %s", pyaudio.get_portaudio_version_text())
             except Exception:
                 pass
             # 自行掃描裝置清單，不依賴 get_default_wasapi_loopback()：

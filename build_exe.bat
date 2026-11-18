@@ -14,6 +14,9 @@ pip install pyinstaller==6.22.3
 
 pyinstaller --noconfirm --clean agent\app.spec
 
+rem 音訊探測工具（診斷 exe 環境的 WASAPI loopback，不會影響主程式）
+pyinstaller --noconfirm --clean agent\probe.spec
+
 if exist dist\FormosalabTranslator\FormosalabTranslator.exe (
     echo.
     echo [完成] 輸出在 dist\FormosalabTranslator\
