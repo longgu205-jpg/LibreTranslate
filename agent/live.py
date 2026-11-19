@@ -23,6 +23,11 @@ try:  # Windows-only package; graceful fallback elsewhere.
 except ImportError:
     pyaudio = None
 
+try:  # direct WASAPI capture: real HRESULT diagnostics, no third-party audio lib
+    from agent import wasapi_capture
+except Exception:  # pragma: no cover - import-time safety net
+    wasapi_capture = None
+
 
 class LiveCaptureError(Exception):
     pass
@@ -114,8 +119,33 @@ class LoopbackSource:
         self.sample_rate = 48000
         self._pyaudio = None
         self._stream = None
+        self._wasapi = None
 
     def __enter__(self):
+        # 首選：直呼 Windows 內建 ctypes WASAPI，失敗時回報真實 HRESULT
+        # （PyAudioWPatch 會吞掉底層錯誤碼，只給 -9996）。
+        if wasapi_capture is not None and wasapi_capture.is_supported():
+            cap = None
+            try:
+                cap = wasapi_capture.WasapiLoopbackCapture()
+                cap.__enter__()
+                self._wasapi = cap
+                self.channels = int(cap.channels)
+                self.sample_rate = int(cap.sample_rate)
+                logger.info(
+                    "Loopback capture started (direct WASAPI): %d Hz, %d ch",
+                    self.sample_rate, self.channels,
+                )
+                return self
+            except Exception as exc:
+                logger.error("Direct WASAPI loopback failed: %r", exc)
+                try:
+                    if cap is not None:
+                        cap.__exit__()
+                except Exception:
+                    pass
+                self._wasapi = None
+                # 直呼失敗→依序回退到 PyAudioWPatch 梙子
         if pyaudio is None:
             raise LiveCaptureError("PyAudioWPatch 未安裝（僅支援 Windows）")
         try:
@@ -273,10 +303,14 @@ class LoopbackSource:
             pass
 
     def read(self) -> bytes:
+        if self._wasapi is not None:
+            return self._wasapi.read(max(64, int(self.sample_rate * self.READ_SECONDS)))
         return self._stream.read(max(64, int(self.sample_rate * self.READ_SECONDS)), exception_on_overflow=False)
 
     def read_available(self) -> int:
         """Frames waiting unread in the audio buffer (0 if unknown)."""
+        if self._wasapi is not None:
+            return self._wasapi.available()
         try:
             return self._stream.get_read_available()
         except Exception:
@@ -284,6 +318,15 @@ class LoopbackSource:
 
     def drain(self, frames_to_drop: int):
         """Read and discard stale frames so latency never accumulates."""
+        if self._wasapi is not None:
+            while frames_to_drop > 0:
+                n = min(frames_to_drop, int(self.sample_rate * 0.5))
+                try:
+                    self._wasapi.read(n)
+                except Exception:
+                    return
+                frames_to_drop -= n
+            return
         while frames_to_drop > 0 and self._stream is not None:
             n = min(frames_to_drop, int(self.sample_rate * 0.5))
             try:
@@ -293,6 +336,12 @@ class LoopbackSource:
             frames_to_drop -= n
 
     def _cleanup(self):
+        if self._wasapi is not None:
+            try:
+                self._wasapi.__exit__()
+            except Exception:
+                pass
+            self._wasapi = None
         if self._stream is not None:
             try:
                 self._stream.stop_stream()
