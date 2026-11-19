@@ -286,3 +286,18 @@ def test_read_mix_format_detects_extensible_float32():
     assert cap.sample_rate == 48000
     assert cap.channels == 2
     assert cap._block_align == 4
+
+
+def test_no_split_invoke_call_sites():
+    """Guard: every _invoke() call must pass its args in the same call.
+
+    A regression once split columns into `_invoke(...)(args)`, which made the
+    inner invocation run with zero arguments (TypeError 4 vs 0). Scan the
+    source statically so this can never sneak back in.
+    """
+    import re
+
+    from pathlib import Path
+    source = Path("agent/wasapi_capture.py").read_text(encoding="utf-8")
+    # any `_invoke(` ... `)(` on one call chain -> broken split call
+    assert re.search(r"_invoke\([^()]*(?:\([^()]*\)[^()]*)*\)\(", source) is None

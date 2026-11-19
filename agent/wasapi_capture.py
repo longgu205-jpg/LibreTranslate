@@ -229,36 +229,39 @@ class WasapiLoopbackCapture:
             raise WasapiError("CoCreateInstance(MMDeviceEnumerator)", hr)
 
         self._device = c_void_p()
-        hr = _invoke("GetDefaultAudioEndpoint(eRender/eConsole)", self._enumerator, 4, _Prototype_GetDefaultAudioEndpoint)(
-            self._enumerator, E_RENDER, E_CONSOLE, ctypes.byref(self._device))
+        hr = _invoke("GetDefaultAudioEndpoint(eRender/eConsole)", self._enumerator, 4,
+                     _Prototype_GetDefaultAudioEndpoint, self._enumerator,
+                     E_RENDER, E_CONSOLE, ctypes.byref(self._device))
         if hr != 0:
             raise WasapiError("GetDefaultAudioEndpoint(eRender/eConsole)", hr)
 
         self._client = c_void_p()
-        hr = _invoke("IMMDevice.Activate(IAudioClient)", self._device, 3, _Prototype_IMMDevice_Activate)(
-            self._device, ctypes.byref(_IID_IAudioClient), CLSCTX_ALL, None,
-            ctypes.byref(self._client))
+        hr = _invoke("IMMDevice.Activate(IAudioClient)", self._device, 3,
+                     _Prototype_IMMDevice_Activate, self._device,
+                     ctypes.byref(_IID_IAudioClient), CLSCTX_ALL, None,
+                     ctypes.byref(self._client))
         if hr != 0:
             raise WasapiError("IMMDevice.Activate(IAudioClient)", hr)
 
         self._format_ptr = c_void_p()
-        hr = _invoke("GetMixFormat", self._client, 8, _Prototype_GetMixFormat)(
-            self._client, ctypes.byref(self._format_ptr))
+        hr = _invoke("GetMixFormat", self._client, 8, _Prototype_GetMixFormat,
+                     self._client, ctypes.byref(self._format_ptr))
         if hr != 0 or not self._format_ptr.value:
             raise WasapiError("GetMixFormat", hr)
         self._read_mix_format()
 
         self._initialize_loopback(self.BUFFER_HNS)
         buf = ctypes.c_uint32(0)
-        hr = _invoke("GetBufferSize", self._client, 4, _Prototype_GetBufferSize)(
-            self._client, ctypes.byref(buf))
+        hr = _invoke("GetBufferSize", self._client, 4, _Prototype_GetBufferSize,
+                     self._client, ctypes.byref(buf))
         if hr == 0:
             logger.info("WASAPI buffer frames: %d", buf.value)
 
         self._capture = c_void_p()
-        hr = _invoke("GetService(IAudioCaptureClient)", self._client, 14, _Prototype_GetService)(
-            self._client, ctypes.byref(_IID_IAudioCaptureClient),
-            ctypes.byref(self._capture))
+        hr = _invoke("GetService(IAudioCaptureClient)", self._client, 14,
+                     _Prototype_GetService, self._client,
+                     ctypes.byref(_IID_IAudioCaptureClient),
+                     ctypes.byref(self._capture))
         if hr != 0:
             raise WasapiError("GetService(IAudioCaptureClient)", hr)
 
