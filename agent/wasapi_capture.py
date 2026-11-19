@@ -68,9 +68,20 @@ _AUDCLNT_ERRORS = {
 }
 
 
+_GENERIC_HRESULTS = {
+    0x80004005: "E_FAIL",
+    0x80070057: "E_INVALIDARG",
+    0x8007000E: "E_OUTOFMEMORY",
+    0x80040154: "REGDB_E_CLASSNOTREG",
+    0x80010106: "RPC_E_CHANGED_MODE",
+    0x800401F0: "CO_E_NOTINITIALIZED",
+    0x80070005: "E_ACCESSDENIED",
+}
+
+
 def hresult_name(hr: int) -> str:
     hr &= 0xFFFFFFFF
-    name = _AUDCLNT_ERRORS.get(hr)
+    name = _AUDCLNT_ERRORS.get(hr) or _GENERIC_HRESULTS.get(hr)
     return "0x%08X%s" % (hr, " (%s)" % name if name else "")
 
 
@@ -89,7 +100,10 @@ class WasapiError(Exception):
 
 # -------------------------------------------------------------------- GUIDs
 class _GUID(ctypes.Structure):
-    _fields_ = [("Data1", c_ulong), ("Data2", c_ushort), ("Data3", c_ushort),
+    # c_uint32 instead of c_ulong: c_ulong is 8 bytes on LP64 Linux but the
+    # Windows GUID Data1 is DWORD (4 bytes) -- fixed.size keeps the layout
+    # identical on every platform (also makes the unit tests meaningful).
+    _fields_ = [("Data1", c_uint32), ("Data2", c_ushort), ("Data3", c_ushort),
                 ("Data4", c_ubyte * 8)]
 
 
@@ -105,8 +119,9 @@ _FLOAT_SUBFORMAT_GUID = _guid(0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xAA
 
 
 class _WAVEFORMATEX(ctypes.Structure):
+    # DWORD fields use c_uint32 (c_ulong would be 8 bytes on LP64 Linux).
     _fields_ = [("wFormatTag", c_ushort), ("nChannels", c_ushort),
-                ("nSamplesPerSec", c_ulong), ("nAvgBytesPerSec", c_ulong),
+                ("nSamplesPerSec", c_uint32), ("nAvgBytesPerSec", c_uint32),
                 ("nBlockAlign", c_ushort), ("wBitsPerSample", c_ushort),
                 ("cbSize", c_ushort)]
 
@@ -116,6 +131,21 @@ def _vtbl_method(iface, index, prototype):
     vtbl = cast(iface, POINTER(c_void_p)).contents.value
     addr = cast(vtbl + index * sizeof(c_void_p), POINTER(c_void_p)).contents.value
     return prototype(addr)
+
+
+def _invoke(stage, iface, index, prototype, *args):
+    """Call a vtable method, converting unexpected exceptions into WasapiError.
+
+    ctypes raises raw OSError/ArgumentError when something is wrong at the
+    ABI level; attaching the stage name here is what tells us exactly which
+    native call blew up in the frozen exe.
+    """
+    try:
+        return _vtbl_method(iface, index, prototype)(*args)
+    except WasapiError:
+        raise
+    except Exception as exc:
+        raise WasapiError(stage, 0, repr(exc)) from exc
 
 
 if WINFUNCTYPE is not None:
@@ -166,7 +196,10 @@ class WasapiLoopbackCapture:
         if not is_supported():
             raise WasapiError("platform check", 0, "not Windows")
         ole32 = ctypes.windll.ole32
-        hr = ole32.CoInitializeEx(None, 0x0)  # MTA; capture thread is private
+        try:
+            hr = ole32.CoInitializeEx(None, 0x0)  # MTA; capture thread is private
+        except Exception as exc:
+            raise WasapiError("CoInitializeEx", 0, repr(exc)) from exc
         if hr in (0, 1):  # S_OK / S_FALSE -> we own the uninitialize
             self._com_init_done = True
         elif (hr & 0xFFFFFFFF) == RPC_E_CHANGED_MODE:
@@ -186,27 +219,30 @@ class WasapiLoopbackCapture:
     def _open_stream(self):
         ole32 = ctypes.windll.ole32
         self._enumerator = c_void_p()
-        hr = ole32.CoCreateInstance(
-            ctypes.byref(_CLSID_MMDeviceEnumerator), None, CLSCTX_ALL,
-            ctypes.byref(_IID_IMMDeviceEnumerator), ctypes.byref(self._enumerator))
+        try:
+            hr = ole32.CoCreateInstance(
+                ctypes.byref(_CLSID_MMDeviceEnumerator), None, CLSCTX_ALL,
+                ctypes.byref(_IID_IMMDeviceEnumerator), ctypes.byref(self._enumerator))
+        except Exception as exc:
+            raise WasapiError("CoCreateInstance(MMDeviceEnumerator)", 0, repr(exc)) from exc
         if hr != 0:
             raise WasapiError("CoCreateInstance(MMDeviceEnumerator)", hr)
 
         self._device = c_void_p()
-        hr = _vtbl_method(self._enumerator, 4, _Prototype_GetDefaultAudioEndpoint)(
+        hr = _invoke("GetDefaultAudioEndpoint(eRender/eConsole)", self._enumerator, 4, _Prototype_GetDefaultAudioEndpoint)(
             self._enumerator, E_RENDER, E_CONSOLE, ctypes.byref(self._device))
         if hr != 0:
             raise WasapiError("GetDefaultAudioEndpoint(eRender/eConsole)", hr)
 
         self._client = c_void_p()
-        hr = _vtbl_method(self._device, 3, _Prototype_IMMDevice_Activate)(
+        hr = _invoke("IMMDevice.Activate(IAudioClient)", self._device, 3, _Prototype_IMMDevice_Activate)(
             self._device, ctypes.byref(_IID_IAudioClient), CLSCTX_ALL, None,
             ctypes.byref(self._client))
         if hr != 0:
             raise WasapiError("IMMDevice.Activate(IAudioClient)", hr)
 
         self._format_ptr = c_void_p()
-        hr = _vtbl_method(self._client, 8, _Prototype_GetMixFormat)(
+        hr = _invoke("GetMixFormat", self._client, 8, _Prototype_GetMixFormat)(
             self._client, ctypes.byref(self._format_ptr))
         if hr != 0 or not self._format_ptr.value:
             raise WasapiError("GetMixFormat", hr)
@@ -214,19 +250,19 @@ class WasapiLoopbackCapture:
 
         self._initialize_loopback(self.BUFFER_HNS)
         buf = ctypes.c_uint32(0)
-        hr = _vtbl_method(self._client, 4, _Prototype_GetBufferSize)(
+        hr = _invoke("GetBufferSize", self._client, 4, _Prototype_GetBufferSize)(
             self._client, ctypes.byref(buf))
         if hr == 0:
             logger.info("WASAPI buffer frames: %d", buf.value)
 
         self._capture = c_void_p()
-        hr = _vtbl_method(self._client, 14, _Prototype_GetService)(
+        hr = _invoke("GetService(IAudioCaptureClient)", self._client, 14, _Prototype_GetService)(
             self._client, ctypes.byref(_IID_IAudioCaptureClient),
             ctypes.byref(self._capture))
         if hr != 0:
             raise WasapiError("GetService(IAudioCaptureClient)", hr)
 
-        hr = _vtbl_method(self._client, 10, _Prototype_StartStop)(self._client)
+        hr = _invoke("IAudioClient.Start", self._client, 10, _Prototype_StartStop, self._client)
         if hr != 0:
             raise WasapiError("IAudioClient.Start", hr)
         self._started = True
@@ -242,8 +278,8 @@ class WasapiLoopbackCapture:
         if fmt.wFormatTag == WAVE_FORMAT_IEEE_FLOAT or (
                 fmt.wFormatTag == WAVE_FORMAT_EXTENSIBLE
                 and fmt.wBitsPerSample == 32
-                and cast(self._format_ptr.value + 24, POINTER(_GUID)).contents
-                == _FLOAT_SUBFORMAT_GUID):
+                and bytes(cast(self._format_ptr.value + 24, POINTER(_GUID)).contents)
+                == bytes(_FLOAT_SUBFORMAT_GUID)):
             self._mix_kind = "float32"
         elif fmt.wBitsPerSample == 16:
             self._mix_kind = "int16"
@@ -252,21 +288,21 @@ class WasapiLoopbackCapture:
         self._block_align = self.channels * 2
 
     def _initialize_loopback(self, buffer_hns):
-        hr = _vtbl_method(self._client, 3, _Prototype_Initialize)(
-            self._client, SHARE_SHARED, FLAG_LOOPBACK, buffer_hns, 0,
-            self._format_ptr.value, None)
+        hr = _invoke("Initialize(loopback shared)", self._client, 3, _Prototype_Initialize,
+                     self._client, SHARE_SHARED, FLAG_LOOPBACK, buffer_hns, 0,
+                     self._format_ptr.value, None)
         if hr == 0:
             return
         if (hr & 0xFFFFFFFF) == 0x88890019:  # BUFFER_SIZE_NOT_ALIGNED -> align up
             period = ctypes.c_longlong(1_000_000)  # default 10ms guess
-            _vtbl_method(self._client, 9, _Prototype_GetDevicePeriod)(
-                self._client, ctypes.byref(period), None)
+            _invoke("GetDevicePeriod", self._client, 9, _Prototype_GetDevicePeriod,
+                    self._client, ctypes.byref(period), None)
             aligned = ((buffer_hns + period.value - 1) // period.value) * period.value
             logger.info("WASAPI: buffer not aligned, retrying with %s (period %s)",
                         aligned, period.value)
-            hr2 = _vtbl_method(self._client, 3, _Prototype_Initialize)(
-                self._client, SHARE_SHARED, FLAG_LOOPBACK, aligned, 0,
-                self._format_ptr.value, None)
+            hr2 = _invoke("Initialize(aligned loopback)", self._client, 3, _Prototype_Initialize,
+                          self._client, SHARE_SHARED, FLAG_LOOPBACK, aligned, 0,
+                          self._format_ptr.value, None)
             if hr2 == 0:
                 return
             raise WasapiError("Initialize(aligned loopback)", hr2)
@@ -281,8 +317,8 @@ class WasapiLoopbackCapture:
         if self._capture is not None and self._capture.value:
             try:
                 packet = c_uint32(0)
-                hr = _vtbl_method(self._capture, 5, _Prototype_GetNextPacketSize)(
-                    self._capture, ctypes.byref(packet))
+                hr = _invoke("GetNextPacketSize(peek)", self._capture, 5, _Prototype_GetNextPacketSize,
+                             self._capture, ctypes.byref(packet))
                 if hr == 0 and packet.value:
                     frames += int(packet.value)
             except Exception:
@@ -310,8 +346,8 @@ class WasapiLoopbackCapture:
         if self._capture is None or not self._capture.value:
             return False
         packet = c_uint32(0)
-        hr = _vtbl_method(self._capture, 5, _Prototype_GetNextPacketSize)(
-            self._capture, ctypes.byref(packet))
+        hr = _invoke("GetNextPacketSize", self._capture, 5, _Prototype_GetNextPacketSize,
+                     self._capture, ctypes.byref(packet))
         if hr != 0:
             raise WasapiError("GetNextPacketSize", hr)
         if packet.value == 0:
@@ -319,9 +355,9 @@ class WasapiLoopbackCapture:
         data = c_void_p()
         frames = c_uint32(0)
         flags = c_ulong(0)
-        hr = _vtbl_method(self._capture, 3, _Prototype_GetBuffer)(
-            self._capture, ctypes.byref(data), ctypes.byref(frames),
-            ctypes.byref(flags), None, None)
+        hr = _invoke("GetBuffer", self._capture, 3, _Prototype_GetBuffer,
+                     self._capture, ctypes.byref(data), ctypes.byref(frames),
+                     ctypes.byref(flags), None, None)
         if hr != 0:
             raise WasapiError("GetBuffer", hr)
         n = frames.value
@@ -332,8 +368,8 @@ class WasapiLoopbackCapture:
                 size = n * int(self._mix_bits // 8) * self.channels
                 raw = ctypes.string_at(data.value, size)
         finally:
-            _vtbl_method(self._capture, 4, _Prototype_ReleaseBuffer)(
-                self._capture, n)
+            _invoke("ReleaseBuffer", self._capture, 4, _Prototype_ReleaseBuffer,
+                    self._capture, n)
         converted = self._to_int16(raw)
         self._pending += converted
         return True
@@ -358,7 +394,8 @@ class WasapiLoopbackCapture:
     def stop(self):
         if self._client is not None and self._client.value and self._started:
             try:
-                _vtbl_method(self._client, 11, _Prototype_StartStop)(self._client)
+                _invoke("IAudioClient.Stop", self._client, 11, _Prototype_StartStop,
+                        self._client)
             except Exception:
                 pass
             self._started = False

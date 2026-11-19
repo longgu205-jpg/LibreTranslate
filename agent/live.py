@@ -138,7 +138,7 @@ class LoopbackSource:
                 )
                 return self
             except Exception as exc:
-                logger.error("Direct WASAPI loopback failed: %r", exc)
+                logger.error("Direct WASAPI loopback failed: %r", exc, exc_info=True)
                 try:
                     if cap is not None:
                         cap.__exit__()

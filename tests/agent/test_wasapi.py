@@ -228,3 +228,61 @@ def test_loopback_source_skips_wasapi_when_unsupported(monkeypatch):
         assert src._wasapi is None
     assert len(fake_pa.open_calls) == 1
     FakeWasapiModule.IsSupported = True
+
+
+# --------------------------------------------------- stage diagnostics (new) 
+def test_invoke_wraps_unexpected_exceptions(monkeypatch):
+    import agent.wasapi_capture as wc
+    from agent.wasapi_capture import WasapiError
+
+    def broken(*args, **kwargs):
+        raise OSError(22, "The parameter is incorrect.", None, -2147024809, None)
+
+    monkeypatch.setattr(wc, "_vtbl_method", broken)
+    with pytest.raises(WasapiError) as info:
+        wc._invoke("IMMDevice.Activate(IAudioClient)", None, 3, None)
+    assert info.value.stage == "IMMDevice.Activate(IAudioClient)"
+    assert "OSError(22" in str(info.value)
+
+
+def test_invoke_passes_through_wasapi_error(monkeypatch):
+    import agent.wasapi_capture as wc
+    from agent.wasapi_capture import WasapiError
+
+    def broken(*args, **kwargs):
+        raise WasapiError("Internal", 0x88890008)
+
+    monkeypatch.setattr(wc, "_vtbl_method", broken)
+    with pytest.raises(WasapiError) as info:
+        wc._invoke("Outer", None, 3, None)
+    assert info.value.stage == "Internal"
+
+
+def test_hresult_name_maps_generic_hresult():
+    from agent.wasapi_capture import hresult_name
+    assert "E_INVALIDARG" in hresult_name(0x80070057)
+    assert "E_ACCESSDENIED" in hresult_name(0x80070005)
+
+
+def test_read_mix_format_detects_extensible_float32():
+    import ctypes
+    import struct
+
+    from agent.wasapi_capture import (_FLOAT_SUBFORMAT_GUID,
+                                      WasapiLoopbackCapture)
+
+    # Raw WAVEFORMATEXTENSIBLE bytes exactly as Windows layout:
+    # WAVEFORMATEX(18) + wValidBits(2) + dwChannelMask(4) + SubFormat GUID(16)
+    buf = ctypes.create_string_buffer(40)
+    struct.pack_into("<HHIIHHH", buf, 0, 0xFFFE, 2, 48000, 96000, 8, 32, 22)
+    struct.pack_into("<H", buf, 18, 32)           # wValidBitsPerSample
+    struct.pack_into("<I", buf, 20, 3)            # dwChannelMask = front L/R
+    buf[24:40] = bytes(_FLOAT_SUBFORMAT_GUID)     # SubFormat = IEEE float
+
+    cap = WasapiLoopbackCapture.__new__(WasapiLoopbackCapture)
+    cap._format_ptr = ctypes.c_void_p(ctypes.addressof(buf))
+    cap._read_mix_format()
+    assert cap._mix_kind == "float32"
+    assert cap.sample_rate == 48000
+    assert cap.channels == 2
+    assert cap._block_align == 4
