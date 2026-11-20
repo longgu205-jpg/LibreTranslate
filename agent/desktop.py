@@ -1,0 +1,126 @@
+import base64
+import faulthandler
+import logging
+import os
+import socket
+import threading
+import time
+
+import uvicorn
+
+from agent.config import settings
+from agent.main import app
+
+logger = logging.getLogger("agent.desktop")
+
+
+def write_pdf_file(path: str, data_b64: str):
+    with open(path, "wb") as fh:
+        fh.write(base64.b64decode(data_b64))
+
+
+class DesktopApi:
+    server_port = 0  # set in run_desktop()
+
+    def open_live_window(self):
+        """開啟永遠在最上層的即時字幕浮動視窗。"""
+        import webview
+
+        existing = getattr(webview, "windows", [])
+        for window in existing[1:]:
+            if getattr(window, "title", "") == "即時字幕":
+                return "already_open"
+        webview.create_window(
+            "即時字幕",
+            f"http://127.0.0.1:{self.server_port}/live/window",
+            width=560,
+            height=320,
+            on_top=True,
+            resizable=True,
+        )
+        return "opened"
+
+    def save_pdf(self, data_b64: str, filename: str = "translated.pdf"):
+        import webview
+
+        window = webview.windows[0]
+        target = window.create_file_dialog(
+            webview.SAVE_DIALOG,
+            save_filename=filename,
+        )
+        if not target:
+            return "cancelled"
+        path = target if isinstance(target, str) else target[0]
+        write_pdf_file(path, data_b64)
+        return path
+
+
+def pick_free_port(host: str | None = None) -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host or settings.host, 0))
+        return sock.getsockname()[1]
+
+
+def start_server(port: int) -> tuple[uvicorn.Server, threading.Thread]:
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=settings.host, port=port, log_level="warning")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+
+    deadline = time.time() + 15
+    while not server.started and time.time() < deadline:
+        time.sleep(0.1)
+    if not server.started:
+        raise RuntimeError("FastAPI server failed to start within 15 seconds")
+    return server, thread
+
+
+def shutdown_server(server: uvicorn.Server, thread: threading.Thread):
+    server.should_exit = True
+    thread.join(timeout=5)
+    os._exit(0)
+
+
+def run_desktop():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    # 行車記錄器：C 層原生崩潰（閃退）時把 Python 呼叫堆疊印到主控台。
+    faulthandler.enable()
+    port = pick_free_port()
+    logger.info("Starting server on port %d", port)
+    DesktopApi.server_port = port
+    server, thread = start_server(port)
+
+    if os.getenv("AGENT_HEADLESS") == "1":
+        logger.info(
+            "Headless mode: serving at http://127.0.0.1:%d (press Ctrl+C to stop)", port
+        )
+        try:
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+        shutdown_server(server, thread)
+
+    import webview
+
+    webview.create_window(
+        "中英翻譯_Formosalab watergu 製",
+        f"http://127.0.0.1:{port}/",
+        js_api=DesktopApi(),
+        width=1100,
+        height=850,
+        min_size=(700, 500),
+    )
+    try:
+        webview.start()
+    finally:
+        logger.info("Window closed, shutting down")
+        shutdown_server(server, thread)
+
+
+if __name__ == "__main__":
+    run_desktop()
