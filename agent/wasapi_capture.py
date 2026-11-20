@@ -43,6 +43,7 @@ E_RENDER = 0          # eRender
 E_CONSOLE = 0         # eConsole
 SHARE_SHARED = 0      # AUDCLNT_SHAREMODE_SHARED
 FLAG_LOOPBACK = 0x00020000
+FLAG_NOPERSIST = 0x00080000
 FLAG_SILENT = 0x1
 RPC_E_CHANGED_MODE = 0x80010106
 
@@ -170,6 +171,23 @@ if WINFUNCTYPE is not None:
                                        POINTER(c_ulong), POINTER(c_uint64), POINTER(c_uint64))
     _Prototype_ReleaseBuffer = WINFUNCTYPE(HRESULT, c_void_p, c_uint32)
     _Prototype_GetNextPacketSize = WINFUNCTYPE(HRESULT, c_void_p, POINTER(c_uint32))
+    # vtable index 7: HRESULT IsFormatSupported(BOOL sharemode, WAVEFORMATEX*, WAVEFORMATEX**)
+    _Prototype_IsFormatSupported = WINFUNCTYPE(HRESULT, c_void_p, c_long, c_void_p, POINTER(c_void_p))
+else:  # non-Windows: keep the names defined so reference sites cannot NameError
+    _Prototype_QueryInterface = None
+    _Prototype_Release = None
+    _Prototype_GetDefaultAudioEndpoint = None
+    _Prototype_IMMDevice_Activate = None
+    _Prototype_Initialize = None
+    _Prototype_GetBufferSize = None
+    _Prototype_GetMixFormat = None
+    _Prototype_GetDevicePeriod = None
+    _Prototype_StartStop = None
+    _Prototype_GetService = None
+    _Prototype_GetBuffer = None
+    _Prototype_ReleaseBuffer = None
+    _Prototype_GetNextPacketSize = None
+    _Prototype_IsFormatSupported = None
 
 
 def is_supported() -> bool:
@@ -313,24 +331,30 @@ class WasapiLoopbackCapture:
         return max(1, int(period.value))
 
     def _initialize_loopback(self, buffer_hns):
-        """Initialize the loopback stream, trying a ladder of buffer durations.
+        """Initialize the loopback stream, trying a ladder of flag/buffer combos.
 
         MSDN: a FAILED Initialize may legally be retried on the same client
         (only a successful one makes the next call return E_ALREADY_INITIALIZED).
+        The ladder includes AUDCLNT_STREAMFLAGS_NOPERSIST variants: if volume/
+        session persistence is what trips the engine, NOPERSIST clears it.
         """
         period = self._period_hns()
         aligned = ((buffer_hns + period - 1) // period) * period
         attempts = [
-            ("buffer=%d" % buffer_hns, buffer_hns),
-            ("buffer=engine-default", 0),
-            ("buffer=aligned(%d)" % aligned, aligned),
+            ("loopback buffer=%d" % buffer_hns, FLAG_LOOPBACK, buffer_hns),
+            ("loopback nopersist buffer=%d" % buffer_hns,
+             FLAG_LOOPBACK | FLAG_NOPERSIST, buffer_hns),
+            ("loopback engine-default", FLAG_LOOPBACK, 0),
+            ("loopback nopersist engine-default",
+             FLAG_LOOPBACK | FLAG_NOPERSIST, 0),
+            ("loopback aligned(%d)" % aligned, FLAG_LOOPBACK, aligned),
         ]
         last = None
-        for label, dur in attempts:
+        for label, flags, dur in attempts:
             try:
                 hr = _invoke("Initialize(%s)" % label, self._client, 3,
                              _Prototype_Initialize,
-                             self._client, SHARE_SHARED, FLAG_LOOPBACK, dur, 0,
+                             self._client, SHARE_SHARED, flags, dur, 0,
                              self._format_ptr.value, None)
                 if hr == 0:
                     logger.info("WASAPI Initialize ok (%s)", label)
@@ -338,7 +362,81 @@ class WasapiLoopbackCapture:
             except WasapiError as exc:
                 last = exc
                 logger.error("WASAPI Initialize failed (%s): %s", label, exc)
+        self._diagnose()
         raise last or WasapiError("Initialize(loopback)", 0, "empty ladder")
+
+    # ---------------------------------------------------------------- probes
+    def _diagnose(self):
+        """Log-only probes that pinpoint WHY every Initialize attempt failed.
+
+        Runs only after the whole ladder failed. Every probe swallows its own
+        errors so diagnostics can never mask the real loopback failure.
+        """
+        logger.info("WASAPI diag: all Initialize attempts failed, running probes")
+        self._diag_is_format_supported()
+        self._diag_render_canary()
+
+    def _diag_is_format_supported(self):
+        """Probe 1: does the engine accept the exact mix format at all?"""
+        closest = c_void_p()
+        try:
+            _invoke("diag IsFormatSupported", self._client, 7,
+                    _Prototype_IsFormatSupported, self._client,
+                    c_long(SHARE_SHARED), self._format_ptr.value,
+                    ctypes.byref(closest))
+        except Exception as exc:
+            logger.info("WASAPI diag: IsFormatSupported rejected the mix "
+                        "format too: %s", exc)
+            return
+        logger.info("WASAPI diag: IsFormatSupported(shared, mix format) = S_OK "
+                    "(engine accepts the format)")
+        if closest.value:
+            try:
+                cf = cast(closest, POINTER(_WAVEFORMATEX)).contents
+                logger.info("WASAPI diag: closest-match format: tag=0x%04X "
+                            "ch=%d rate=%d bits=%d", cf.wFormatTag,
+                            cf.nChannels, cf.nSamplesPerSec, cf.wBitsPerSample)
+            except Exception:
+                pass
+            try:
+                ctypes.windll.ole32.CoTaskMemFree(closest)
+            except Exception:
+                pass
+
+    def _diag_render_canary(self):
+        """Probe 2: canary -- plain render stream (NO loopback flag) in the
+        same process on the same endpoint.
+
+        If even this gets E_INVALIDARG, the engine rejects our PROCESS image
+        regardless of stream type -- the signature of process-level
+        interception (antivirus/EDR), not a format or flag problem.
+        """
+        client = c_void_p()
+        try:
+            _invoke("diag Activate(canary)", self._device, 3,
+                    _Prototype_IMMDevice_Activate, self._device,
+                    ctypes.byref(_IID_IAudioClient), CLSCTX_ALL, None,
+                    ctypes.byref(client))
+        except Exception as exc:
+            logger.info("WASAPI diag: canary Activate failed: %s", exc)
+            return
+        try:
+            _invoke("diag Initialize(render, no loopback)", client, 3,
+                    _Prototype_Initialize, client, SHARE_SHARED, 0,
+                    self.BUFFER_HNS, 0, self._format_ptr.value, None)
+            logger.info("WASAPI diag: render (no loopback) Initialize OK -> "
+                        "the engine accepts this process; the rejection is "
+                        "specific to the loopback flag")
+        except Exception as exc:
+            logger.info("WASAPI diag: render (no loopback) Initialize also "
+                        "failed -> the engine rejects this PROCESS regardless "
+                        "of stream type (process-level interception, e.g. "
+                        "antivirus/EDR): %s", exc)
+        finally:
+            try:
+                _vtbl_method(client, 2, _Prototype_Release)(client)
+            except Exception:
+                pass
 
     # ---------------------------------------------------------------- read
     def available(self) -> int:

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests for the direct ctypes WASAPI loopback capture (方案 C)."""
 import array
+import logging
 import sys
 from pathlib import Path
 
@@ -322,3 +323,111 @@ def test_invoke_recovers_hresult_from_oserror(monkeypatch):
         wc._invoke("Initialize(loopback shared)", None, 3, None)
     assert info.value.hresult == 0x80070057  # not the negative signed form
     assert "E_INVALIDARG" in str(info.value)
+
+
+# ------------------------------------------------ 方案 2: Initialize probes
+class FakeWinOSError(OSError):
+    def __init__(self, winerror=-2147024809):
+        super().__init__(22, "The parameter is incorrect.")
+        self.winerror = winerror
+
+
+def _bare_capture(monkeypatch):
+    import ctypes
+
+    import agent.wasapi_capture as wc
+    cap = wc.WasapiLoopbackCapture.__new__(wc.WasapiLoopbackCapture)
+    cap._client = ctypes.c_void_p(1)
+    cap._format_ptr = ctypes.c_void_p(2)
+    cap._device = ctypes.c_void_p(3)
+    return cap
+
+
+def test_initialize_ladder_tries_nopersist_and_runs_diagnostics(monkeypatch, caplog):
+    """When every Initialize attempt fails, the ladder must try NOPERSIST
+    variants and then run the log-only diagnostics without masking the error."""
+    import ctypes
+
+    import agent.wasapi_capture as wc
+    from agent.wasapi_capture import WasapiError
+
+    attempts = []
+
+    def fake_invoke(stage, iface, index, proto, *args):
+        if stage.startswith("Initialize"):
+            attempts.append((stage, args[2]))  # args[2] = stream flags
+            raise WasapiError(stage, 0x80070057)
+        raise WasapiError(stage, 0x80070057)   # probe calls fail too
+
+    monkeypatch.setattr(wc, "_invoke", fake_invoke)
+    cap = _bare_capture(monkeypatch)
+    cap._period_hns = lambda: 100000
+
+    with caplog.at_level(logging.INFO, logger="agent.live.wasapi"):
+        with pytest.raises(WasapiError) as info:
+            cap._initialize_loopback(5_000_000)
+
+    assert info.value.hresult == 0x80070057  # original error not masked
+    flags = [f for (_stage, f) in attempts]
+    assert wc.FLAG_LOOPBACK in flags
+    assert (wc.FLAG_LOOPBACK | wc.FLAG_NOPERSIST) in flags
+    assert all(f & wc.FLAG_LOOPBACK for f in flags)  # never a bare stream
+    assert any("running probes" in r.getMessage() for r in caplog.records)
+    assert any("IsFormatSupported" in r.getMessage() for r in caplog.records)
+    assert any("canary" in r.getMessage() for r in caplog.records)
+
+
+def test_diag_is_format_supported_ok_logs_and_frees(monkeypatch, caplog):
+    """Probe 1: engine accepts the format -> verdict logged; canary render
+    stream succeeds -> conclusion specific to the loopback flag."""
+    import agent.wasapi_capture as wc
+
+    calls = []
+
+    def fake_vtbl(iface, index, prototype):
+        calls.append(index)
+        return lambda *a: 0  # every probe call succeeds
+
+    monkeypatch.setattr(wc, "_vtbl_method", fake_vtbl)
+    cap = _bare_capture(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="agent.live.wasapi"):
+        cap._diagnose()
+
+    assert 7 in calls  # IsFormatSupported ran
+    assert any("engine accepts the format" in r.getMessage()
+               for r in caplog.records)
+    assert any("specific to the loopback flag" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_diag_render_canary_reports_process_rejection(monkeypatch, caplog):
+    """Probe 2: even a plain render stream (no LOOPBACK) gets E_INVALIDARG ->
+    log must point at process-level interception, not a format problem."""
+    import agent.wasapi_capture as wc
+
+    init_calls = []
+
+    def fake_vtbl(iface, index, prototype):
+        def call(*args):
+            if index == 7:        # IsFormatSupported -> accepted
+                return 0
+            if index == 3:
+                init_calls.append(1)
+                if len(init_calls) == 1:
+                    return 0      # canary Activate ok
+                raise FakeWinOSError()  # render Initialize -> E_INVALIDARG
+            return 0              # Release
+        return call
+
+    monkeypatch.setattr(wc, "_vtbl_method", fake_vtbl)
+    cap = _bare_capture(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="agent.live.wasapi"):
+        cap._diagnose()
+
+    assert len(init_calls) == 2  # Activate + canary Initialize
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("rejects this PROCESS" in m for m in msgs)
+    assert any("E_INVALIDARG" in m or "0x80070057" in m for m in msgs)
+
