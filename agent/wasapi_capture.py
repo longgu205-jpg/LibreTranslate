@@ -144,6 +144,13 @@ def _invoke(stage, iface, index, prototype, *args):
         return _vtbl_method(iface, index, prototype)(*args)
     except WasapiError:
         raise
+    except OSError as exc:
+        # ctypes auto-raises OSError(winerror=hr) for failed HRESULT results;
+        # recover the unsigned HRESULT so the ladder can react per-code.
+        winerr = getattr(exc, "winerror", None)
+        if winerr is not None:
+            raise WasapiError(stage, int(winerr) & 0xFFFFFFFF, repr(exc)) from exc
+        raise WasapiError(stage, 0, repr(exc)) from exc
     except Exception as exc:
         raise WasapiError(stage, 0, repr(exc)) from exc
 
@@ -278,6 +285,15 @@ class WasapiLoopbackCapture:
         self._mix_bits = fmt.wBitsPerSample
         self.channels = int(fmt.nChannels) or 2
         self.sample_rate = int(fmt.nSamplesPerSec) or 48000
+        try:
+            raw = bytes(cast(self._format_ptr.value, POINTER(c_ubyte *
+                        (18 + int(fmt.cbSize or 0)))).contents)
+            logger.info("WASAPI mix format raw: tag=0x%04X ch=%d rate=%d bits=%d "
+                        "block=%d cb=%d bytes=%s", fmt.wFormatTag, fmt.nChannels,
+                        fmt.nSamplesPerSec, fmt.wBitsPerSample, fmt.nBlockAlign,
+                        fmt.cbSize, raw.hex())
+        except Exception:
+            pass
         if fmt.wFormatTag == WAVE_FORMAT_IEEE_FLOAT or (
                 fmt.wFormatTag == WAVE_FORMAT_EXTENSIBLE
                 and fmt.wBitsPerSample == 32
@@ -290,26 +306,39 @@ class WasapiLoopbackCapture:
             self._mix_kind = "int%d" % fmt.wBitsPerSample
         self._block_align = self.channels * 2
 
+    def _period_hns(self) -> int:
+        period = ctypes.c_longlong(0)
+        _invoke("GetDevicePeriod", self._client, 9, _Prototype_GetDevicePeriod,
+                self._client, ctypes.byref(period), None)
+        return max(1, int(period.value))
+
     def _initialize_loopback(self, buffer_hns):
-        hr = _invoke("Initialize(loopback shared)", self._client, 3, _Prototype_Initialize,
-                     self._client, SHARE_SHARED, FLAG_LOOPBACK, buffer_hns, 0,
-                     self._format_ptr.value, None)
-        if hr == 0:
-            return
-        if (hr & 0xFFFFFFFF) == 0x88890019:  # BUFFER_SIZE_NOT_ALIGNED -> align up
-            period = ctypes.c_longlong(1_000_000)  # default 10ms guess
-            _invoke("GetDevicePeriod", self._client, 9, _Prototype_GetDevicePeriod,
-                    self._client, ctypes.byref(period), None)
-            aligned = ((buffer_hns + period.value - 1) // period.value) * period.value
-            logger.info("WASAPI: buffer not aligned, retrying with %s (period %s)",
-                        aligned, period.value)
-            hr2 = _invoke("Initialize(aligned loopback)", self._client, 3, _Prototype_Initialize,
-                          self._client, SHARE_SHARED, FLAG_LOOPBACK, aligned, 0,
-                          self._format_ptr.value, None)
-            if hr2 == 0:
-                return
-            raise WasapiError("Initialize(aligned loopback)", hr2)
-        raise WasapiError("Initialize(loopback shared)", hr)
+        """Initialize the loopback stream, trying a ladder of buffer durations.
+
+        MSDN: a FAILED Initialize may legally be retried on the same client
+        (only a successful one makes the next call return E_ALREADY_INITIALIZED).
+        """
+        period = self._period_hns()
+        aligned = ((buffer_hns + period - 1) // period) * period
+        attempts = [
+            ("buffer=%d" % buffer_hns, buffer_hns),
+            ("buffer=engine-default", 0),
+            ("buffer=aligned(%d)" % aligned, aligned),
+        ]
+        last = None
+        for label, dur in attempts:
+            try:
+                hr = _invoke("Initialize(%s)" % label, self._client, 3,
+                             _Prototype_Initialize,
+                             self._client, SHARE_SHARED, FLAG_LOOPBACK, dur, 0,
+                             self._format_ptr.value, None)
+                if hr == 0:
+                    logger.info("WASAPI Initialize ok (%s)", label)
+                    return
+            except WasapiError as exc:
+                last = exc
+                logger.error("WASAPI Initialize failed (%s): %s", label, exc)
+        raise last or WasapiError("Initialize(loopback)", 0, "empty ladder")
 
     # ---------------------------------------------------------------- read
     def available(self) -> int:

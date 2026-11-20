@@ -301,3 +301,24 @@ def test_no_split_invoke_call_sites():
     source = Path("agent/wasapi_capture.py").read_text(encoding="utf-8")
     # any `_invoke(` ... `)(` on one call chain -> broken split call
     assert re.search(r"_invoke\([^()]*(?:\([^()]*\)[^()]*)*\)\(", source) is None
+
+
+def test_invoke_recovers_hresult_from_oserror(monkeypatch):
+    """ctypes auto-raises OSError(winerror=...) for failed HRESULT; verify
+    _invoke recovers the unsigned code so the Initialize ladder can branch."""
+    import agent.wasapi_capture as wc
+    from agent.wasapi_capture import WasapiError
+
+    class FakeWinOSError(OSError):
+        def __init__(self):
+            super().__init__(22, "The parameter is incorrect.")
+            self.winerror = -2147024809  # as ctypes sets it on Windows
+
+    def broken(*args, **kwargs):
+        raise FakeWinOSError()
+
+    monkeypatch.setattr(wc, "_vtbl_method", broken)
+    with pytest.raises(WasapiError) as info:
+        wc._invoke("Initialize(loopback shared)", None, 3, None)
+    assert info.value.hresult == 0x80070057  # not the negative signed form
+    assert "E_INVALIDARG" in str(info.value)
